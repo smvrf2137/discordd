@@ -280,6 +280,55 @@ window.electronMixer.onApps(renderApps);
 window.electronMixer.onUsers(renderUsers);
 window.electronMixer.onStatus(setStatus);
 
+// Panel diagnostyki
+const debugLog = document.getElementById("debug-log");
+const debugToggle = document.getElementById("debug-toggle");
+const debugLines = [];
+
+function addLog(line) {
+  const text = String(line || "");
+  debugLines.push(text);
+  if (debugLines.length > 120) debugLines.shift();
+  if (debugLog) {
+    const esc = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const cls = /ERR|blad|error|nie wystartowal|fail/i.test(text)
+      ? "err"
+      : /OK|gotowy|READY|znaleziono/i.test(text)
+      ? "ok"
+      : "";
+    const span = document.createElement("div");
+    if (cls) span.className = cls;
+    span.textContent = text;
+    debugLog.appendChild(span);
+    while (debugLog.childNodes.length > 120) {
+      debugLog.removeChild(debugLog.firstChild);
+    }
+    debugLog.scrollTop = debugLog.scrollHeight;
+  }
+}
+
+if (debugToggle) {
+  debugToggle.addEventListener("click", () => {
+    const hidden = debugLog.hasAttribute("hidden");
+    if (hidden) {
+      debugLog.removeAttribute("hidden");
+      debugToggle.textContent = "▾ Diagnostyka";
+    } else {
+      debugLog.setAttribute("hidden", "");
+      debugToggle.textContent = "▸ Diagnostyka";
+    }
+  });
+}
+
+if (window.electronMixer.onLog) {
+  window.electronMixer.onLog(addLog);
+} else {
+  addLog("Brak kanalu logow (stary preload?).");
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   window.electronMixer.getState();
 });

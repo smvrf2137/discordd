@@ -40,4 +40,10 @@ contextBridge.exposeInMainWorld("electronMixer", {
     ipcRenderer.on("mixer-status", handler);
     return () => ipcRenderer.removeListener("mixer-status", handler);
   },
+
+  onLog: (cb) => {
+    const handler = (_e, line) => cb(line);
+    ipcRenderer.on("mixer-log", handler);
+    return () => ipcRenderer.removeListener("mixer-log", handler);
+  },
 });

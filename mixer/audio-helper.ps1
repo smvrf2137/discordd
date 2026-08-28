@@ -4,9 +4,18 @@
 #   SELF <pid[,pid...]> - oznacz pid(y) jako wlasne procesy aplikacji
 #   QUIT                - zakoncz
 # Linia "READY" oznacza start; sesje wypisywane jako "APPS <json>".
+# Linie "INFO ..." / "ERR ..." to diagnostyka.
 
 $ErrorActionPreference = "Continue"
 
+function Write-Line($text) {
+  try {
+    [Console]::Out.WriteLine($text)
+    [Console]::Out.Flush()
+  } catch {}
+}
+
+# ---- C# / WASAPI ----
 $source = @'
 using System;
 using System.Collections.Generic;
@@ -126,7 +135,7 @@ namespace MixerAudio {
             catch { continue; }
             uint pid = 0;
             if (sc2.GetProcessId(out pid) != 0 || pid == 0) continue;
-            if (sc2.IsSystemSoundsSession() == 0) continue; // pomin dzwieki systemowe
+            if (sc2.IsSystemSoundsSession() == 0) continue;
             ISimpleAudioVolume vol = sc2 as ISimpleAudioVolume;
             if (vol == null) continue;
             v(pid, ProcName(pid), vol);
@@ -146,19 +155,23 @@ namespace MixerAudio {
       IMMDeviceEnumerator en = null;
       try {
         en = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-        VisitEndpoint(en, 1, v); // eMultimedia
-        VisitEndpoint(en, 2, v); // eCommunications
+        VisitEndpoint(en, 1, v);
+        VisitEndpoint(en, 2, v);
       } catch {
       } finally {
         if (en != null) Marshal.ReleaseComObject(en);
       }
     }
 
-    public static string Poll(HashSet<uint> selfPids) {
+    public static string Poll(uint[] selfPids) {
+      HashSet<uint> self = new HashSet<uint>();
+      if (selfPids != null) {
+        foreach (uint p in selfPids) self.Add(p);
+      }
       StringBuilder sb = new StringBuilder();
       sb.Append("[");
       bool first = true;
-      var seen = new HashSet<uint>();
+      HashSet<uint> seen = new HashSet<uint>();
       try {
         VisitSessions(delegate(uint pid, string procName, ISimpleAudioVolume vol) {
           if (seen.Contains(pid)) return;
@@ -174,7 +187,7 @@ namespace MixerAudio {
           sb.Append(",\"name\":\"").Append(Esc(name)).Append("\"");
           sb.Append(",\"vol\":").Append(level.ToString(CultureInfo.InvariantCulture));
           sb.Append(",\"muted\":").Append(muted ? "true" : "false");
-          sb.Append(",\"self\":").Append(selfPids != null && selfPids.Contains(pid) ? "true" : "false");
+          sb.Append(",\"self\":").Append(self.Contains(pid) ? "true" : "false");
           sb.Append("}");
         });
       } catch { }
@@ -200,17 +213,22 @@ namespace MixerAudio {
 
 try {
   Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
+  Write-Line "INFO add-type OK (PS $($PSVersionTable.PSVersion))"
 } catch {
-  [Console]::Out.WriteLine("ERR add-type: " + $_.Exception.Message)
-  [Console]::Out.Flush()
+  Write-Line ("ERR add-type: " + $_.Exception.Message)
+  if ($_.Exception.InnerException) {
+    Write-Line ("ERR add-type inner: " + $_.Exception.InnerException.Message)
+  }
+  foreach ($ie in $_.Exception.LoaderExceptions) {
+    if ($ie) { Write-Line ("ERR loader: " + $ie.Message) }
+  }
   exit 1
 }
 
-# Wspoldzielony stan miedzy runspace czytajacym stdin a petla glowna.
-# UWAGA: skrypt dla runspace musi byc przekazany jako STRING (nie scriptblock),
-# bo scriptblock jest przywiazany do runspace, w ktorym powstal.
+# Wspoldzielony stan. UWAGA: skrypt dla runspace przekazany jako STRING
+# (scriptblock jest przywiazany do runspace, w ktorym powstal).
 $shared = [hashtable]::Synchronized(@{
-  selfPids = New-Object 'System.Collections.Generic.HashSet[uint32]'
+  selfPids = @()
   quit     = $false
 })
 
@@ -229,10 +247,12 @@ while (-not $shared.quit) {
     $shared.quit = $true
     break
   } elseif ($parts[0] -eq "SELF" -and $parts.Length -ge 2) {
+    $ids = @()
     foreach ($raw in $parts[1].Split(",")) {
       $v = [uint32]0
-      if ([uint32]::TryParse($raw.Trim(), [ref]$v)) { [void]$shared.selfPids.Add($v) }
+      if ([uint32]::TryParse($raw.Trim(), [ref]$v)) { $ids += $v }
     }
+    $shared.selfPids = $ids
   } elseif ($parts[0] -eq "SET" -and $parts.Length -ge 3) {
     $pidVal = [uint32]0
     $pct = 0
@@ -264,27 +284,33 @@ try {
   $ps.Runspace = $rs
   [void]$ps.AddScript($workerScript)
   $async = $ps.BeginInvoke()
+  Write-Line "INFO runspace czytajacy stdin wystartowal"
 } catch {
-  [Console]::Out.WriteLine("ERR runspace: " + $_.Exception.Message)
-  [Console]::Out.Flush()
+  Write-Line ("ERR runspace: " + $_.Exception.Message)
   exit 1
 }
 
-try { [Console]::Out.WriteLine("READY"); [Console]::Out.Flush() } catch {}
+Write-Line "READY"
 
 $pollFailures = 0
 while (-not $shared.quit -and -not $async.IsCompleted) {
   try {
-    $json = [MixerAudio.Core]::Poll($shared.selfPids)
-    [Console]::Out.WriteLine("APPS $json")
-    [Console]::Out.Flush()
+    $json = [MixerAudio.Core]::Poll([uint32[]]$shared.selfPids)
+    Write-Line ("APPS " + $json)
     $pollFailures = 0
   } catch {
     $pollFailures++
-    [Console]::Out.WriteLine("ERR poll: " + $_.Exception.Message)
+    Write-Line ("ERR poll: " + $_.Exception.Message)
     if ($pollFailures -ge 5) { break }
   }
   Start-Sleep -Milliseconds 750
+}
+
+# Bledy wykonania w runspace roboczym
+if ($ps -and $ps.Streams.Error.Count -gt 0) {
+  foreach ($e in $ps.Streams.Error) {
+    Write-Line ("ERR worker: " + $e.ToString())
+  }
 }
 
 try { if ($ps) { $ps.Stop(); $ps.Dispose() } } catch {}

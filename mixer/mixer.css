@@ -241,3 +241,50 @@ body {
   width: 14px;
   flex-shrink: 0;
 }
+
+.debug {
+  margin-top: 14px;
+  border-top: 1px solid #3f4147;
+  padding-top: 8px;
+}
+
+.debug-toggle {
+  background: transparent;
+  border: none;
+  color: #949ba4;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  padding: 4px 2px;
+  text-transform: uppercase;
+}
+
+.debug-toggle:hover {
+  color: #dbdee1;
+}
+
+.debug-log {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow-y: auto;
+  background: #111214;
+  border: 1px solid #2b2d31;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #b5bac1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.debug-log .err {
+  color: #f23f43;
+}
+
+.debug-log .ok {
+  color: #23a559;
+}

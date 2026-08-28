@@ -20,10 +20,12 @@ class AudioControl {
     this.lastError = null;
     this._listeners = new Set();
     this._statusListeners = new Set();
+    this._logListeners = new Set();
     this._proc = null;
     this._stopped = false;
     this._restarts = 0;
     this._lastJSON = "";
+    this._stderrTail = "";
     this._start();
 
     // Rejestracja PID-ow aplikacji (glowny + renderery) co 10s
@@ -46,16 +48,22 @@ class AudioControl {
   }
 
   _log(msg) {
-    const line =
-      "[" +
-      new Date().toISOString() +
-      "] " +
-      String(msg && msg.stack ? msg.stack : msg) +
-      "\n";
+    const text = String(msg && msg.stack ? msg.stack : msg);
+    const line = "[" + new Date().toISOString() + "] " + text + "\n";
     try {
       const f = this._logFile();
       if (f) fs.appendFileSync(f, line);
     } catch (e) {}
+    for (const fn of this._logListeners) {
+      try {
+        fn(text);
+      } catch (e) {}
+    }
+  }
+
+  onLog(fn) {
+    this._logListeners.add(fn);
+    return () => this._logListeners.delete(fn);
   }
 
   _selfPids() {
@@ -94,6 +102,7 @@ class AudioControl {
       proc = spawn(
         "powershell.exe",
         [
+          "-NoLogo",
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -115,6 +124,8 @@ class AudioControl {
     }
 
     this._proc = proc;
+    this._stderrTail = "";
+    const startLogs = [];
     let gotReady = false;
 
     proc.on("error", (err) => {
@@ -123,8 +134,10 @@ class AudioControl {
     });
 
     proc.stderr.on("data", (chunk) => {
-      const text = chunk.toString("utf8").trim();
-      if (text) this._log("[stderr] " + text);
+      const text = chunk.toString("utf8");
+      this._stderrTail = (this._stderrTail + text).slice(-2000);
+      const trimmed = text.trim();
+      if (trimmed) this._log("[stderr] " + trimmed);
     });
 
     let buffer = "";
@@ -146,8 +159,14 @@ class AudioControl {
         } else if (line.startsWith("APPS ")) {
           this._handleApps(line.slice(5));
         } else if (line.startsWith("ERR")) {
-          this._log("[helper] " + line.slice(4));
-          this.lastError = line.slice(4).trim();
+          const msg = line.slice(3).trim();
+          this._log("[helper] " + msg);
+          if (!gotReady) startLogs.push("ERR: " + msg);
+          else this.lastError = msg;
+        } else if (line.startsWith("INFO")) {
+          const msg = line.slice(4).trim();
+          this._log("[helper] " + msg);
+          if (!gotReady) startLogs.push(msg);
         } else {
           this._log("[helper] " + line);
         }
@@ -159,12 +178,15 @@ class AudioControl {
       if (this._stopped) return;
 
       if (!gotReady) {
-        this._setStatus(
-          false,
+        let detail = startLogs.join(" | ");
+        const errTail = this._stderrTail.trim();
+        if (errTail && !detail) detail = errTail.slice(-400);
+        const msg =
           "Pomocnik audio nie wystartowal (kod " +
-            code +
-            "). Sprawdz logs/mixer-audio.log w folderze aplikacji."
-        );
+          code +
+          ")" +
+          (detail ? ": " + detail.slice(0, 300) : "");
+        this._setStatus(false, msg);
       }
 
       // Restart z narastajacym opoznieniem (max 30s)

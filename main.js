@@ -911,7 +911,9 @@ ipcMain.on("mixer-get-state", () => {
 });
 
 ipcMain.on("mixer-debug", (_event, msg) => {
-  console.log("[mixer-debug]", msg);
+  const text = String(msg);
+  console.log("[mixer-debug]", text);
+  sendToMixer("mixer-log", text);
 });
 
 ipcMain.on("mixer-set-app-volume", (_event, data) => {
@@ -948,6 +950,10 @@ app.whenReady().then(() => {
 
   audioControl.onStatus((available) => {
     sendToMixer("mixer-status", available);
+  });
+
+  audioControl.onLog((line) => {
+    sendToMixer("mixer-log", "[audio] " + line);
   });
 });
 

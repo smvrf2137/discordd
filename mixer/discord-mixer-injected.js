@@ -308,6 +308,14 @@
   // Zwraca elementy "wierszy" uzytkownikow na kanale glosowym.
   function voiceRowElements() {
     const rows = new Set();
+
+    // Najpewniejsze: elementy listy kanalu glosowego z data-list-item-id="voice-<kanal>_<user>"
+    try {
+      document
+        .querySelectorAll('[data-list-item-id^="voice-"]')
+        .forEach((el) => rows.add(el));
+    } catch (e) {}
+
     const selectors = [
       '[class*="voiceUser"]',
       '[class*="voice-user"]',
@@ -319,8 +327,15 @@
         document.querySelectorAll(sel).forEach((el) => {
           // wspinamy sie do najblizszego "kontenera uzytkownika"
           let container = el;
-          if (/avatar/i.test(el.className.baseVal !== undefined ? el.className.baseVal : el.className || "")) {
-            container = el.closest('li, [class*="voiceUser"], [class*="voice-user"], [class*="container"]') || el.parentElement;
+          const cls =
+            el.className && el.className.baseVal !== undefined
+              ? el.className.baseVal
+              : String(el.className || "");
+          if (/avatar/i.test(cls)) {
+            container =
+              el.closest(
+                '[data-list-item-id^="voice-"], li, [class*="voiceUser"], [class*="voice-user"], [class*="container"]'
+              ) || el.parentElement;
           }
           if (container) rows.add(container);
         });
@@ -330,6 +345,21 @@
   }
 
   function userIdFromRow(row) {
+    // 0) atrybut data-list-item-id="voice-<channelId>_<userId>"
+    try {
+      const dli = row.getAttribute && row.getAttribute("data-list-item-id");
+      if (dli) {
+        let m = dli.match(/_(\d{6,})$/);
+        if (m) return m[1];
+      }
+      const dliParent = row.closest && row.closest('[data-list-item-id^="voice-"]');
+      if (dliParent) {
+        const dli2 = dliParent.getAttribute("data-list-item-id") || "";
+        let m = dli2.match(/_(\d{6,})$/);
+        if (m) return m[1];
+      }
+    } catch (e) {}
+
     // 1) avatar URL
     const img = row.querySelector("img");
     if (img) {
@@ -343,7 +373,6 @@
       const href = link.getAttribute("href") || "";
       let m = href.match(/users\/(\d{6,})/);
       if (m) return m[1];
-      // /channels/@me/<channelId>?<userId> bywa w DM
     }
     // 3) klasa zawierajaca id
     const cls =
@@ -393,6 +422,7 @@
 
   // ===== GLOWNA PENTLA =====
   let lastPayload = "";
+  let tickCount = 0;
 
   function collectUsers() {
     const users = new Map(); // id -> user obj
@@ -475,6 +505,27 @@
         try {
           bridge.pushUsers(users);
         } catch (e) {}
+      }
+
+      // Heartbeat diagnostyczny co ~10s
+      tickCount++;
+      if (tickCount % 7 === 0) {
+        dbg(
+          "heartbeat: users=" +
+            users.length +
+            " webpack=" +
+            (!!webpackRequire) +
+            " userStore=" +
+            (!!userStore) +
+            " voiceStore=" +
+            (!!voiceStateStore) +
+            " volumeModule=" +
+            (!!volumeModule) +
+            " channel=" +
+            (getMyVoiceChannelId() || "brak") +
+            " domRows=" +
+            voiceRowElements().length
+        );
       }
     } catch (e) {
       dbg("tick blad: " + e.message);
