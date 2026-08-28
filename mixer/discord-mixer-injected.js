@@ -448,16 +448,22 @@
   }
 
   // ===== NA ZYWO: maszyna stanu przeciagania =====
-  // Wartosc suwaka naszego i natywnego jest w tej samej skali (0..100,
-  // 100 = domyslna). Otwieramy menu raz, korektujemy strzalkami na zywo,
-  // zamykamy po puszczeniu.
+  // Suwak nasz i natywny maja te sama skale 0..100 (100 = domyslna).
+  // Menu kontekstowe otwieramy raz przy rozpoczeciu przeciagania; samopedzaca
+  // sie petla async na biezaco sciga cel: PageUp/PageDown = skok o 10,
+  // strzalki = skok o 1, z ~18ms odstepem (kazdy klawisz jest commitowany
+  // przez Reacta). Po puszczeniu suwaka petla dogania DOKLADNIE wartosc
+  // koncowa i dopiero wtedy zamyka menu.
   const live = {
     userId: null,
     target: 100,
     state: "idle", // idle | opening | open | closing
+    ending: false,
     slider: null,
-    timer: null,
+    gen: 0,
   };
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function getVolumeSlider() {
     return document.querySelector("#user-context-user-volume [role='slider']");
@@ -468,79 +474,130 @@
     return isFinite(v) ? v : 100;
   }
 
-  function startLiveVolume(userId, percent) {
-    const id = String(userId);
-    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
-    live.userId = id;
-    live.target = p;
+  function finishLive(gen) {
+    if (gen !== live.gen) return;
+    const v = live.slider ? sliderValue(live.slider) : null;
+    dbg("live end " + live.userId + " -> " + live.target + "% (aria=" + v + ")");
+    closeContextMenu();
+    live.state = "closing";
+    live.ending = false;
     live.slider = null;
-    if (live.timer) {
-      clearInterval(live.timer);
-      live.timer = null;
-    }
-
-    if (live.state === "idle" || live.state === "closing") {
-      const row = findVoiceRow(id);
-      if (!row) {
-        dbg("live: brak wiersza osoby " + id);
-        return;
+    const endedGen = live.gen;
+    setTimeout(() => {
+      if (live.gen === endedGen && live.state === "closing") {
+        live.state = "idle";
+        live.userId = null;
       }
-      row.scrollIntoView && row.scrollIntoView({ block: "center" });
-      live.state = "opening";
-      openContextMenu(row);
-    } else if (live.state === "closing") {
-      live.state = "opening";
-    }
+    }, 200);
+  }
 
-    live.timer = setInterval(() => {
+  async function driveLoop(gen) {
+    let missCount = 0;
+    while (gen === live.gen && live.state !== "idle") {
       const slider = getVolumeSlider();
-      if (!slider) return;
-
+      if (!slider) {
+        missCount++;
+        // menu zniknelo w trakcie (Discord przerenderowal / Esc) - otworz ponownie
+        if (missCount === 12 && live.userId && !live.ending) {
+          const row = findVoiceRow(live.userId);
+          if (row) {
+            live.state = "opening";
+            openContextMenu(row);
+          }
+        }
+        await sleep(25);
+        continue;
+      }
+      missCount = 0;
       live.slider = slider;
       live.state = "open";
       try {
         slider.focus();
       } catch (e) {}
 
-      // korekcja wzgledem biezacej pozycji
       const cur = sliderValue(slider);
-      const diff = live.target - cur;
-      if (Math.abs(diff) < 0.6) return;
-
-      // liczba krokow: przynajmniej 1 (plynny podglad na zywo),
-      // max 12 na tick by szybko dogonic cel
-      let steps = Math.max(1, Math.min(12, Math.round(Math.abs(diff))));
-      while (steps-- > 0) {
-        if (diff > 0) fireKey(slider, "ArrowRight", "ArrowRight", 39);
-        else fireKey(slider, "ArrowLeft", "ArrowLeft", 37);
-      }
-      // pamietana wartosc na liscie
+      const diff = Math.round(live.target - cur);
       userVolumes[live.userId] = live.target / 100;
-    }, 40);
+
+      if (diff === 0) {
+        if (live.ending) {
+          finishLive(gen);
+          return;
+        }
+        await sleep(35);
+        continue;
+      }
+
+      // duze skoki: PageUp/PageDown (+/-10), drobne: strzalki (+/-1)
+      const up = diff > 0;
+      const big = Math.floor(Math.abs(diff) / 10);
+      const small = Math.abs(diff) % 10;
+      for (let i = 0; i < big; i++) {
+        if (gen !== live.gen || live.state === "idle") return;
+        fireKey(slider, up ? "PageUp" : "PageDown", up ? "PageUp" : "PageDown", up ? 33 : 34);
+        await sleep(18);
+      }
+      for (let i = 0; i < small; i++) {
+        if (gen !== live.gen || live.state === "idle") return;
+        fireKey(slider, up ? "ArrowRight" : "ArrowLeft", up ? "ArrowRight" : "ArrowLeft", up ? 39 : 37);
+        await sleep(18);
+      }
+      // krotka pauza by Discord zacommitowal, potem czytamy nowa wartosc
+      await sleep(live.ending ? 10 : 5);
+    }
+  }
+
+  function startLiveVolume(userId, percent) {
+    const id = String(userId);
+    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    userVolumes[id] = p / 100;
+
+    if (live.userId === id && (live.state === "open" || live.state === "opening")) {
+      // ten sam uzytkownik, menu w trakcie: tylko aktualizuj cel
+      live.target = p;
+      live.ending = false;
+      return;
+    }
+
+    // nowa sesja (inny uzytkownik / bez menu): zamknij stare, nowa generacja
+    if (live.state === "open" || live.state === "opening") closeContextMenu();
+    live.gen++;
+    live.userId = id;
+    live.target = p;
+    live.ending = false;
+    live.slider = null;
+
+    const row = findVoiceRow(id);
+    if (!row) {
+      dbg("live: brak wiersza osoby " + id);
+      live.state = "idle";
+      return;
+    }
+    try {
+      row.scrollIntoView && row.scrollIntoView({ block: "center" });
+    } catch (e) {}
+    live.state = "opening";
+    openContextMenu(row);
+    driveLoop(live.gen);
   }
 
   function endLiveVolume(userId, percent) {
     const id = String(userId);
-    if (percent != null) {
-      live.target = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    userVolumes[id] = p / 100;
+
+    if (live.userId !== id || live.state === "idle" || live.state === "closing") {
+      // brak aktywnej sesji - wystartuj ja, by moc ustawic wartosc
+      startLiveVolume(id, p);
     }
-    // chwile koryguj, potem zamknij
+    live.target = p;
+    live.ending = true; // petla dogona dokladnie cel i zamknie menu (finishLive)
+
+    // bezpienik: gdyby menu nie dotarlo do celu (np. zniknelo), zamknij po 1.2s
+    const gen = live.gen;
     setTimeout(() => {
-      if (live.timer) {
-        clearInterval(live.timer);
-        live.timer = null;
-      }
-      userVolumes[id] = live.target / 100;
-      const v = live.slider ? sliderValue(live.slider) : null;
-      dbg("live end " + id + " -> " + live.target + "% (aria=" + v + ")");
-      closeContextMenu();
-      live.state = "closing";
-      setTimeout(() => {
-        live.state = "idle";
-        live.slider = null;
-        live.userId = null;
-      }, 200);
-    }, 250);
+      if (gen === live.gen && live.ending) finishLive(gen);
+    }, 1200);
   }
 
   // Zgodnosc: jednorazowe ustawienie = live start+end
