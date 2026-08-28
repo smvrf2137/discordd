@@ -21,7 +21,8 @@
 
   // Znalezione moduly
   let userStore = null;
-  let volumeModule = null;
+  let volumeModule = null; // kompatybilnosc
+  let volumeAction = null; // { mod, set, get, max }
   let voiceStateStore = null;
   let speakingStore = null;
   let channelStore = null;
@@ -227,44 +228,43 @@
 
   let cacheDiagDone = false;
 
+  function findVolumeAction() {
+    let m;
+    m = findInLoadedCache(
+      (o) => hasFn(o, "setLocalVolume") && (hasFn(o, "getLocalVolume") || hasFn(o, "setLocalMute"))
+    );
+    if (m) return { mod: m, set: "setLocalVolume", get: "getLocalVolume", max: 200 };
+    m = findInLoadedCache((o) => hasFn(o, "setLocalVolume"));
+    if (m) return { mod: m, set: "setLocalVolume", get: "getLocalVolume", max: 200 };
+    m = findInLoadedCache(
+      (o) => hasFn(o, "setUserVolume") && hasFn(o, "getUserVolume")
+    );
+    if (m) return { mod: m, set: "setUserVolume", get: "getUserVolume", max: 100 };
+    m = findInLoadedCache((o) => hasFn(o, "setUserVolume"));
+    if (m) return { mod: m, set: "setUserVolume", get: "getUserVolume", max: 100 };
+    return null;
+  }
+
   function scanModules() {
     const cacheCount = webpackRequire && webpackRequire.c ? Object.keys(webpackRequire.c).length : 0;
     const factoryCount = webpackRequire && webpackRequire.m ? Object.keys(webpackRequire.m).length : 0;
 
-    // 1) ZALADOWANY cache - glebokie, niefiltrowane szukanie po runtime nazwach
     if (!userStore) {
       userStore =
         findInLoadedCache((o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
-        userStore;
-    }
-    if (!voiceStateStore) {
-      voiceStateStore =
-        findInLoadedCache((o) => hasFn(o, "getVoiceStatesForChannel")) ||
-        voiceStateStore;
-    }
-    if (!volumeModule) {
-      volumeModule =
-        // obiekt majacy zarowno getter jak i setter glosnosci uzytkownika
-        findInLoadedCache((o) => hasFn(o, "setUserVolume") && hasFn(o, "getUserVolume")) ||
-        findInLoadedCache((o) => hasFn(o, "setUserVolume")) ||
-        findInLoadedCache((o) => {
-          // funkcja (akcja) ustawiajaca glosnosc uzytkownika
-          if (typeof o !== "function" || !/volume/i.test(o.name || "")) return false;
-          return /set|update|local|user/i.test(o.name || "");
-        }) ||
-        volumeModule;
-    }
-
-    // 2) Fallback: szukanie po tresci fabryk (require.m)
-    if (!userStore) {
-      userStore =
         findBySource("getCurrentUser", (o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
         userStore;
     }
     if (!voiceStateStore) {
       voiceStateStore =
+        findInLoadedCache((o) => hasFn(o, "getVoiceStatesForChannel")) ||
         findBySource("getVoiceStatesForChannel", (o) => hasFn(o, "getVoiceStatesForChannel")) ||
         voiceStateStore;
+    }
+    if (!volumeAction) {
+      volumeAction = findVolumeAction();
+      if (!volumeAction) volumeModule = null;
+      else volumeModule = volumeAction.mod;
     }
 
     dbg(
@@ -277,40 +277,25 @@
         " voice=" +
         !!voiceStateStore +
         " volume=" +
-        !!volumeModule
+        !!volumeAction +
+        (volumeAction ? "(" + volumeAction.set + ")" : "")
     );
 
-    // Jednorazowa diagnostyka: nazwy kluczy z "Volume" w zaladowanym cache
     if (!cacheDiagDone && cacheCount > 200) {
       cacheDiagDone = true;
       try {
-        const hits = new Set();
-        const seen = new Set();
-        const stack = [];
-        for (const id of Object.keys(webpackRequire.c)) {
-          const ex = webpackRequire.c[id] && webpackRequire.c[id].exports;
-          if (ex) stack.push({ o: ex, d: 0 });
+        // obiekt z onSetUserVolume - wypisz jego funkcje
+        const store = findInLoadedCache((o) => hasFn(o, "onSetUserVolume"));
+        if (store) {
+          const fns = Object.keys(store).filter((k) => typeof store[k] === "function");
+          dbg("onSetUserVolume obiekt fns: [" + fns.slice(0, 45).join(",") + "]");
+        } else {
+          dbg("onSetUserVolume: brak w cache");
         }
-        let n = 0;
-        while (stack.length && n < 40000) {
-          const { o, d } = stack.pop();
-          n++;
-          if (!o || seen.has(o) || d > 3) continue;
-          if (typeof o !== "object" && typeof o !== "function") continue;
-          seen.add(o);
-          let keys = [];
-          try { keys = Object.keys(o); } catch (e) { continue; }
-          for (const k of keys) {
-            if (/volume/i.test(k) && typeof o[k] === "function") hits.add(k);
-            try {
-              const v = o[k];
-              if (v && (typeof v === "object" || typeof v === "function")) stack.push({ o: v, d: d + 1 });
-            } catch (e) {}
-          }
-        }
-        dbg("cache volume fns: [" + Array.from(hits).slice(0, 25).join(",") + "]");
+        dbg("setLocalVolume w cache: " + !!findInLoadedCache((o) => hasFn(o, "setLocalVolume")));
+        dbg("setUserVolume w cache: " + !!findInLoadedCache((o) => hasFn(o, "setUserVolume")));
       } catch (e) {
-        dbg("cacheDiag blad: " + e.message);
+        dbg("diagVolume blad: " + e.message);
       }
     }
   }
@@ -405,23 +390,26 @@
     return out;
   }
 
-  let volumeScale = 100; // aktualny Discord: 0..100
-
-  function getUserVolumeRaw(userId) {
+  // Wartosci naszego suwaka sa 0..100, gdzie 100 = domyslna glosnosc.
+  // Natywny Discord uzywa skali 0..200 (100 = normalna) dla nowego API,
+  // albo 0..100 (1 = normalna) dla starego.
+  function readUserVolume(userId) {
     try {
-      if (volumeModule) {
-        if (hasFn(volumeModule, "getUserVolume")) return volumeModule.getUserVolume(userId);
-        if (hasFn(volumeModule, "getLocalVolume")) return volumeModule.getLocalVolume(userId);
+      if (volumeAction && hasFn(volumeAction.mod, volumeAction.get)) {
+        return volumeAction.mod[volumeAction.get](String(userId));
       }
     } catch (e) {}
     return null;
   }
 
   function normalizedVolume(userId) {
-    const v = getUserVolumeRaw(userId);
-    if (typeof v !== "number" || !isFinite(v) || v < 0) return 1;
-    if (volumeScale === 100) return Math.max(0, Math.min(1, v / 100));
-    return Math.max(0, Math.min(1, v));
+    const raw = readUserVolume(userId);
+    if (typeof raw !== "number" || !isFinite(raw) || raw < 0) return 1;
+    if (volumeAction && volumeAction.max === 200) {
+      return Math.max(0, Math.min(1, raw / 100));
+    }
+    // skala 0..1
+    return Math.max(0, Math.min(1, raw));
   }
 
   function isSpeakingNow(userId, channelId) {
@@ -440,13 +428,19 @@
 
   function setUserVolume(userId, percent) {
     try {
-      if (!volumeModule) {
+      if (!volumeAction || !volumeAction.mod) {
         dbg("setUserVolume: brak modulu glosnosci");
         return false;
       }
       const p = Math.max(0, Math.min(100, Number(percent) || 0));
-      const value = volumeScale === 100 ? p : p / 100;
-      volumeModule.setUserVolume(String(userId), value);
+      const id = String(userId);
+      if (volumeAction.max === 200) {
+        // setLocalVolume(id, 0..200) — 100 to domyslna glosnosc
+        volumeAction.mod[volumeAction.set](id, p);
+      } else {
+        // stare API (0..1)
+        volumeAction.mod[volumeAction.set](id, p / 100);
+      }
       return true;
     } catch (e) {
       dbg("setUserVolume blad: " + e.message);
@@ -759,12 +753,42 @@
 
   // Glowne zrodlo DOM: wiersze osob na kanale glosowym (klasa voiceUser__),
   // z danymi wyciaganymi z wlokien Reacta (dziala tez dla domyslnych awatarow).
+  let rowDumpDone = false;
+
   function collectVoiceParticipants(myId) {
     const users = new Map();
     try {
-      const rows = document.querySelectorAll('[class*="voiceUser"], [class*="voice-user"]');
+      const rows = document.querySelectorAll(
+        '[class*="voiceUser"], [class*="voice-user"], [class*="userSmall"]'
+      );
+      if (!rowDumpDone && rows.length) {
+        rowDumpDone = true;
+        rows.forEach((row, i) => {
+          const info = fiberUserInfo(row);
+          const cls = classOf(row).slice(0, 60);
+          dbg(
+            "wiersz " +
+              i +
+              ": klasa='" +
+              cls +
+              "'" +
+              " id=" +
+              (info ? info.id : "BRAK") +
+              " nazwa=" +
+              (info ? info.name || "-" : "-")
+          );
+        });
+      }
       rows.forEach((row) => {
-        const info = fiberUserInfo(row);
+        let info = fiberUserInfo(row);
+        if (!info || !info.id) {
+          // fallback: id z URL awatara w tym wierszu
+          const img = row.querySelector ? row.querySelector('img[src*="avatars/"]') : null;
+          if (img) {
+            const m = (img.getAttribute("src") || "").match(/avatars\/(\d{6,})\//);
+            if (m) info = { id: m[1], name: null, muted: false, speaking: false };
+          }
+        }
         if (!info || !info.id) return;
         if (myId && info.id === String(myId)) return;
 
@@ -920,7 +944,7 @@
       } else if (
         !userStore ||
         !voiceStateStore ||
-        !volumeModule
+        !volumeAction
       ) {
         // ponawiaj skan przez pierwsze ~30 s
         if (scanAttempts < 15) {
@@ -952,8 +976,9 @@
             !!userStore +
             " voiceStore=" +
             !!voiceStateStore +
-            " volumeModule=" +
-            !!volumeModule +
+            " volume=" +
+            !!volumeAction +
+            (volumeAction ? "(" + volumeAction.set + ")" : "") +
             " myId=" +
             (myId ? "tak" : "brak") +
             " channel=" +
