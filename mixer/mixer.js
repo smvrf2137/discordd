@@ -62,7 +62,7 @@ function describeApp(app) {
     };
   }
   if (app.self) {
-    return { icon: "💬", label: "Discord (nasz klient)" };
+    return { icon: "💬", label: "Discord" };
   }
   const p = presetFor(app.name);
   if (p) return { icon: p.icon, label: p.label };
@@ -167,17 +167,21 @@ function renderApps(apps) {
 
     if (!bundle) {
       const desc = describeApp(app);
+      const isVirtual = !!app.virtual;
+      const applyVolume = (v) => {
+        if (isVirtual) {
+          window.electronMixer.setSoundcloudVolume(v);
+        } else {
+          window.electronMixer.setAppVolume(app.pid, v);
+        }
+      };
       bundle = makeRow({
         icon: desc.icon,
         name: { text: desc.label },
         percent: Math.round(app.volume * 100),
         sliderClass: "",
-        onInput: (v) => {
-          window.electronMixer.setAppVolume(app.pid, v);
-        },
-        onCommit: (v) => {
-          window.electronMixer.setAppVolume(app.pid, v);
-        },
+        onInput: applyVolume,
+        onCommit: applyVolume,
       });
       appsList.appendChild(bundle.row);
       appBundles.set(app.pid, bundle);
