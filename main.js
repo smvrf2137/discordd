@@ -934,7 +934,7 @@ function sendAppsToMixer() {
   if (!audioControl) return;
   const sessions = audioControl.sessions.slice();
   try {
-    if (soundcloudView && !soundcloudView.isDestroyed()) {
+    if (soundcloudView && soundcloudView.webContents && !soundcloudView.webContents.isDestroyed()) {
       sessions.push(soundcloudVirtualApp());
     }
   } catch (e) {}
@@ -943,7 +943,7 @@ function sendAppsToMixer() {
 
 function sendSoundcloudVolume(pct) {
   try {
-    if (soundcloudView && !soundcloudView.isDestroyed()) {
+    if (soundcloudView && soundcloudView.webContents && !soundcloudView.webContents.isDestroyed()) {
       soundcloudView.webContents.send("soundcloud-set-volume", pct);
     }
   } catch (e) {}
