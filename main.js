@@ -960,31 +960,38 @@ function setupScreenCapture() {
     );
   });
 
-  // Wspoldzielenie ekranu. Najpierw systemowy picker (okno wyboru ekranu/okna),
-  // w razie braku wsparcia fallback wybierajacy pierwszy ekran.
-  const handleRequest = (callback) => {
-    desktopCapturer
-      .getSources({
-        types: ["screen", "window"],
-        thumbnailSize: { width: 0, height: 0 },
-      })
-      .then((sources) => callback({ video: sources[0] || null, audio: undefined }))
-      .catch(() => callback({ video: null, audio: undefined }));
-  };
-
+  // Wspoldzielenie ekranu: zwroc zrodlo glownego ekranu (systemowy picker
+  // bywal konfliktowy i strumien w ogole sie nie startowal).
   try {
-    ses.setDisplayMediaRequestHandler(
-      (_request, callback) => handleRequest(callback),
-      { useSystemPicker: true }
-    );
+    ses.setDisplayMediaRequestHandler((_request, callback) => {
+      console.log("[screenshare] getDisplayMedia requested");
+      desktopCapturer
+        .getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 0, height: 0 },
+        })
+        .then((sources) => {
+          console.log(
+            "[screenshare] sources:",
+            sources.map((s) => `${s.name} (${s.id})`).join(", ") || "BRAK"
+          );
+          const screen = sources[0];
+          if (screen) {
+            callback({ video: screen });
+            console.log("[screenshare] udostepniam ekran:", screen.name);
+          } else {
+            callback({});
+            console.log("[screenshare] brak zrodel ekranu");
+          }
+        })
+        .catch((err) => {
+          console.error("[screenshare] blad desktopCapturer:", err);
+          callback({});
+        });
+    });
+    console.log("[screenshare] display-media handler zarejestrowany");
   } catch (e) {
-    try {
-      ses.setDisplayMediaRequestHandler((_request, callback) =>
-        handleRequest(callback)
-      );
-    } catch (e2) {
-      console.error("setDisplayMediaRequestHandler error:", e2);
-    }
+    console.error("[screenshare] setDisplayMediaRequestHandler error:", e);
   }
 }
 
