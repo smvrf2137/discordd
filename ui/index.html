@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Discord</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="titlebar">
+    <div class="title">Discord</div>
+
+    <div class="window-buttons">
+      <button
+        onclick="toggleOverlay()"
+        class="window-button sc"
+        title="Pokaż / ukryj SoundCloud"
+      >
+        SoundCloud
+      </button>
+
+      <button onclick="minimize()" class="window-button">─</button>
+      <button onclick="maximize()" class="window-button">□</button>
+      <button onclick="closeWindow()" class="window-button close">×</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
