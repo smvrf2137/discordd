@@ -140,21 +140,26 @@
     }
   }
 
-  // BFS po obiekcie (i zagniezdzonych polach) - zwraca pierwszy spelniajacy predykat
-  function deepFind(root, pred) {
+  // BFS po obiekcie (i zagniezdzonych polach) - zwraca pierwszy spelniajacy predykat.
+  // maxDepth i maxNodes chronia przed przegladaniem wielkich kolekcji (np. GuildStore).
+  function deepFind(root, pred, maxDepth, maxNodes) {
     const seen = new Set();
     const stack = [{ o: root, d: 0 }];
+    let nodes = 0;
+    maxDepth = maxDepth || 5;
+    maxNodes = maxNodes || 20000;
     while (stack.length) {
       const { o, d } = stack.pop();
       if (!o || seen.has(o)) continue;
       if (typeof o !== "object" && typeof o !== "function") continue;
       seen.add(o);
+      if (++nodes > maxNodes) break;
       let ok = false;
       try {
         ok = pred(o);
       } catch (e) {}
       if (ok) return o;
-      if (d >= 4) continue;
+      if (d >= maxDepth) continue;
       let keys;
       try {
         keys = Object.keys(o);
@@ -172,6 +177,25 @@
           stack.push({ o: v, d: d + 1 });
         }
       }
+    }
+    return null;
+  }
+
+  // Gleboki skan ZALADOWANYCH modulow (require.c) - bez filtrowania nazw kluczy.
+  // Znajduje obiekty po rzeczywistych (zachowanych w runtime) nazwach metod.
+  function findInLoadedCache(pred) {
+    if (!webpackRequire || !webpackRequire.c) return null;
+    const cache = webpackRequire.c;
+    for (const id of Object.keys(cache)) {
+      let ex;
+      try {
+        ex = cache[id] && cache[id].exports;
+      } catch (e) {
+        continue;
+      }
+      if (!ex) continue;
+      const found = deepFind(ex, pred, 5, 4000);
+      if (found) return found;
     }
     return null;
   }
@@ -201,11 +225,37 @@
     return null;
   }
 
+  let cacheDiagDone = false;
+
   function scanModules() {
     const cacheCount = webpackRequire && webpackRequire.c ? Object.keys(webpackRequire.c).length : 0;
     const factoryCount = webpackRequire && webpackRequire.m ? Object.keys(webpackRequire.m).length : 0;
 
-    // 1) Najpewniejsze: szukanie po tresci fabryk (leniwe moduly sa w require.m)
+    // 1) ZALADOWANY cache - glebokie, niefiltrowane szukanie po runtime nazwach
+    if (!userStore) {
+      userStore =
+        findInLoadedCache((o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
+        userStore;
+    }
+    if (!voiceStateStore) {
+      voiceStateStore =
+        findInLoadedCache((o) => hasFn(o, "getVoiceStatesForChannel")) ||
+        voiceStateStore;
+    }
+    if (!volumeModule) {
+      volumeModule =
+        // obiekt majacy zarowno getter jak i setter glosnosci uzytkownika
+        findInLoadedCache((o) => hasFn(o, "setUserVolume") && hasFn(o, "getUserVolume")) ||
+        findInLoadedCache((o) => hasFn(o, "setUserVolume")) ||
+        findInLoadedCache((o) => {
+          // funkcja (akcja) ustawiajaca glosnosc uzytkownika
+          if (typeof o !== "function" || !/volume/i.test(o.name || "")) return false;
+          return /set|update|local|user/i.test(o.name || "");
+        }) ||
+        volumeModule;
+    }
+
+    // 2) Fallback: szukanie po tresci fabryk (require.m)
     if (!userStore) {
       userStore =
         findBySource("getCurrentUser", (o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
@@ -215,22 +265,6 @@
       voiceStateStore =
         findBySource("getVoiceStatesForChannel", (o) => hasFn(o, "getVoiceStatesForChannel")) ||
         voiceStateStore;
-    }
-    if (!volumeModule) {
-      volumeModule =
-        findBySource("setUserVolume", (o) => hasFn(o, "setUserVolume")) ||
-        findBySource("updateUserVolume", (o) => /volume/i.test(Object.keys(o).join(",")) && hasFn(o, "setUserVolume")) ||
-        volumeModule;
-    }
-
-    // 2) Fallback: skan joca zaladowanego cache
-    if (!userStore || !voiceStateStore || !volumeModule) {
-      eachCandidate((m) => {
-        if (!m || (typeof m !== "object" && typeof m !== "function")) return;
-        if (!userStore && hasFn(m, "getCurrentUser") && hasFn(m, "getUser")) userStore = m;
-        if (!voiceStateStore && hasFn(m, "getVoiceStatesForChannel")) voiceStateStore = m;
-        if (!volumeModule && hasFn(m, "setUserVolume")) volumeModule = m;
-      });
     }
 
     dbg(
@@ -245,6 +279,40 @@
         " volume=" +
         !!volumeModule
     );
+
+    // Jednorazowa diagnostyka: nazwy kluczy z "Volume" w zaladowanym cache
+    if (!cacheDiagDone && cacheCount > 200) {
+      cacheDiagDone = true;
+      try {
+        const hits = new Set();
+        const seen = new Set();
+        const stack = [];
+        for (const id of Object.keys(webpackRequire.c)) {
+          const ex = webpackRequire.c[id] && webpackRequire.c[id].exports;
+          if (ex) stack.push({ o: ex, d: 0 });
+        }
+        let n = 0;
+        while (stack.length && n < 40000) {
+          const { o, d } = stack.pop();
+          n++;
+          if (!o || seen.has(o) || d > 3) continue;
+          if (typeof o !== "object" && typeof o !== "function") continue;
+          seen.add(o);
+          let keys = [];
+          try { keys = Object.keys(o); } catch (e) { continue; }
+          for (const k of keys) {
+            if (/volume/i.test(k) && typeof o[k] === "function") hits.add(k);
+            try {
+              const v = o[k];
+              if (v && (typeof v === "object" || typeof v === "function")) stack.push({ o: v, d: d + 1 });
+            } catch (e) {}
+          }
+        }
+        dbg("cache volume fns: [" + Array.from(hits).slice(0, 25).join(",") + "]");
+      } catch (e) {
+        dbg("cacheDiag blad: " + e.message);
+      }
+    }
   }
 
   // ===== API sklepow =====
@@ -564,52 +632,125 @@
     return key ? el[key] : null;
   }
 
-  // Szuka w propsach wlokna obiektu uzytkownika ({id, username/globalName...})
+  // Czy "cos" wyglada jak obiekt uzytkownika Discorda (musi miec sensowne id)
+  function looksLikeUser(o) {
+    try {
+      if (!o || typeof o !== "object") return null;
+      const id = o.id || o.Id || o.user_id;
+      if (id === undefined || id === null) return null;
+      const s = String(id);
+      if (!/^\d{6,}$/.test(s)) return null;
+      // upewnij sie ze to "uzytkownik" a nie np. rola/emoji: musi miec pola tekstowe
+      const hasUserLike =
+        typeof o.username === "string" ||
+        typeof o.globalName === "string" ||
+        typeof o.displayName === "string" ||
+        typeof o.global_name === "string" ||
+        typeof o.tag === "string" ||
+        typeof o.bot === "boolean";
+      if (!hasUserLike) return null;
+      return {
+        id: s,
+        globalName: o.globalName || o.global_name || o.displayName || o.username || null,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Przeszukuje plaski obiekt props w poszukiwaniu obiektu uzytkownika / voiceState
   function userFromProps(props) {
     if (!props || typeof props !== "object") return null;
-    for (const k of ["user", "author"]) {
-      const u = props[k];
-      if (u && (u.id || u.Id)) return u;
+
+    // bezposrednie pola uzytkownika
+    for (const k of ["user", "author", "profileUser"]) {
+      const u = looksLikeUser(props[k]);
+      if (u) return u;
     }
-    // voiceState bywa { userId, nick, mute, ... }
-    if (props.voiceState) {
-      const vs = props.voiceState;
-      if (vs.userId) return { id: vs.userId, _muted: !!(vs.mute || vs.selfMute) };
+    // voiceState: { userId, nick, mute, selfMute, speaking, ... }
+    const vs = props.voiceState || props.voice || props.state;
+    if (vs && typeof vs === "object") {
+      const vid = vs.userId || vs.user_id || vs.id;
+      if (vid && /^\d{6,}$/.test(String(vid))) {
+        return {
+          id: String(vid),
+          globalName: vs.nick || vs.nickname || vs.username || null,
+          _muted: !!(vs.mute || vs.selfMute || vs.self_mute),
+          _speaking: !!vs.speaking,
+        };
+      }
     }
-    // niektre wiersze trzymaja bezposrednio userId
-    if (props.userId) return { id: props.userId };
+    // bezposrednie userId + nazwa
+    if (props.userId && /^\d{6,}$/.test(String(props.userId))) {
+      return { id: String(props.userId), globalName: typeof props.name === "string" ? props.name : null };
+    }
+    // przejrzyj plytkie wartosci props (moga byc w "record"/"item")
+    for (const k of Object.keys(props)) {
+      try {
+        const v = props[k];
+        if (!v || typeof v !== "object") continue;
+        const u = looksLikeUser(v);
+        if (u) return u;
+        if (v.user) {
+          const u2 = looksLikeUser(v.user);
+          if (u2) return { ...u2, _muted: !!(v.mute || v.selfMute), _speaking: !!v.speaking };
+        }
+      } catch (e) {}
+    }
     return null;
   }
 
-  // Przechodzi po wloknie w gore i wydobywa dane uzytkownika + mowi/wyciszony
+  // Przechodzi po wloknie w gore (a takze przez memoizedState/hooki) i zwraca
+  // dane uzytkownika + mowi/wyciszony.
   function fiberUserInfo(el) {
     let fiber = getFiber(el);
     let hops = 0;
-    while (fiber && hops < 20) {
-      let p = null;
+    while (fiber && hops < 30) {
+      const candidates = [];
       try {
-        p = fiber.memoizedProps || fiber.pendingProps;
+        if (fiber.memoizedProps) candidates.push(fiber.memoizedProps);
+        if (fiber.pendingProps) candidates.push(fiber.pendingProps);
       } catch (e) {}
-      if (p) {
+
+      let muted = false;
+      let speaking = false;
+      for (const p of candidates) {
         const u = userFromProps(p);
         if (u && u.id) {
-          const id = String(u.id);
-          const name =
-            u.globalName ||
-            u.displayName ||
-            u.username ||
-            u.global_name ||
-            (typeof p.name === "string" ? p.name : null) ||
-            null;
-          let muted = !!u._muted;
-          let speaking = false;
           try {
-            muted = muted || !!(p.muted || (p.voiceState && (p.voiceState.mute || p.voiceState.selfMute)));
-            speaking = !!(p.speaking || (p.voiceState && p.voiceState.speaking));
+            muted = muted || !!u._muted || !!p.muted;
+            speaking = speaking || !!u._speaking || !!p.speaking;
+            if (p.voiceState) {
+              muted = muted || !!(p.voiceState.mute || p.voiceState.selfMute);
+              speaking = speaking || !!p.voiceState.speaking;
+            }
           } catch (e) {}
-          return { id, name, muted, speaking };
+          return { id: u.id, name: u.globalName || u.displayName || u.username || null, muted, speaking };
         }
       }
+
+      // hooki (memoizedState) - np. memoizowane {user, voiceState}
+      try {
+        let hook = fiber.memoizedState;
+        let hh = 0;
+        while (hook && hh < 8) {
+          const ms = hook.memoizedState;
+          if (ms && typeof ms === "object") {
+            const u = userFromProps(ms);
+            if (u && u.id) {
+              return {
+                id: u.id,
+                name: u.globalName || u.displayName || u.username || null,
+                muted: !!u._muted,
+                speaking: !!u._speaking,
+              };
+            }
+          }
+          hook = hook.next;
+          hh++;
+        }
+      } catch (e) {}
+
       fiber = fiber.return;
       hops++;
     }
@@ -676,6 +817,7 @@
   }
 
   let lastDomDbg = "";
+  let lastParticipantCount = -1;
   function collectDomUsers(myId) {
     const users = new Map();
     const items = voiceDataItems();
@@ -759,7 +901,8 @@
         }
       }
     }
-    if (participants.size) {
+    if (participants.size && participants.size !== lastParticipantCount) {
+      lastParticipantCount = participants.size;
       dbg("DOM rozmowa: uczestnikow " + participants.size);
     }
 
