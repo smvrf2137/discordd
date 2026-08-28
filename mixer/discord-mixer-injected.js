@@ -201,6 +201,48 @@
     return null;
   }
 
+  // Jak deepFind, ale zbiera wszystkie trafienia (do capu)
+  function deepFindAll(root, pred, maxDepth, maxNodes, cap) {
+    const found = [];
+    const seen = new Set();
+    const stack = [{ o: root, d: 0 }];
+    let nodes = 0;
+    maxDepth = maxDepth || 5;
+    maxNodes = maxNodes || 8000;
+    cap = cap || 50;
+    while (stack.length && found.length < cap) {
+      const { o, d } = stack.pop();
+      if (!o || seen.has(o)) continue;
+      if (typeof o !== "object" && typeof o !== "function") continue;
+      seen.add(o);
+      if (++nodes > maxNodes) break;
+      let ok = false;
+      try {
+        ok = pred(o);
+      } catch (e) {}
+      if (ok) found.push(o);
+      if (d >= maxDepth) continue;
+      let keys;
+      try {
+        keys = Object.keys(o);
+      } catch (e) {
+        continue;
+      }
+      for (const k of keys) {
+        let v;
+        try {
+          v = o[k];
+        } catch (e) {
+          continue;
+        }
+        if (v && (typeof v === "object" || typeof v === "function")) {
+          stack.push({ o: v, d: d + 1 });
+        }
+      }
+    }
+    return found;
+  }
+
   // Szuka modulu po fragmencie zrodla fabryki (require.m), nastepnie wymaga go
   // i przeszukuje eksporty w poszukiwaniu obiektu spelniajacego predykat.
   function findBySource(marker, pred) {
@@ -220,10 +262,86 @@
       } catch (e) {
         continue;
       }
-      const found = deepFind(mod, pred);
+      const found = deepFind(mod, pred, 5, 20000);
       if (found) return found;
     }
     return null;
+  }
+
+  let volumeDiscoveryDone = false;
+
+  // Wymusza zaladowanie modulow z require.m ktorych tresc zawiera "volume",
+  // i szuka w nich settera glosnosci uzytkownika.
+  function discoverVolumeInFactories() {
+    if (volumeDiscoveryDone || !webpackRequire || !webpackRequire.m) return;
+    volumeDiscoveryDone = true;
+    const methodNames = new Set();
+    const candidates = [];
+    try {
+      const ids = Object.keys(webpackRequire.m);
+      for (const id of ids) {
+        let src = "";
+        try {
+          src = webpackRequire.m[id].toString();
+        } catch (e) {
+          continue;
+        }
+        if (!/olume/.test(src)) continue;
+        // dodatkowo zawiazane z uzytkownikiem/glosem
+        let mod;
+        try {
+          mod = webpackRequire(id);
+        } catch (e) {
+          continue;
+        }
+        deepFindAll(
+          mod,
+          (o) => {
+            try {
+              const keys = Object.keys(o);
+              for (const k of keys) {
+                if (typeof o[k] !== "function") continue;
+                if (/olume/.test(k)) methodNames.add(k);
+                if (/^(set|update)\w*Volume$/.test(k)) {
+                  const get = keys.find(
+                    (kk) => typeof o[kk] === "function" && /^(get)\w*Volume$/.test(kk)
+                  );
+                  candidates.push({ mod: o, set: k, get: get || null });
+                }
+              }
+            } catch (e) {}
+            return false;
+          },
+          6,
+          4000,
+          40
+        );
+        // wczesne zatrzymanie gdy mamy optymalny setter
+        if (candidates.some((c) => c.set === "setLocalVolume")) break;
+      }
+      dbg("factory volume fns: [" + Array.from(methodNames).slice(0, 40).join(",") + "]");
+      dbg("kandydaci settera: " + candidates.slice(0, 10).map((c) => c.set + (c.get ? "/" + c.get : "")).join(" , "));
+    } catch (e) {
+      dbg("discoverVolume blad: " + e.message);
+    }
+
+    // wybor: preferuj setLocalVolume, potem setUserVolume
+    const prefer = (name) =>
+      candidates.find((c) => c.set === name) ||
+      candidates.find((c) => /local/i.test(c.set));
+    let pick =
+      prefer("setLocalVolume") ||
+      prefer("setUserVolume") ||
+      candidates.find((c) => /local/i.test(c.set)) ||
+      candidates[0];
+    if (pick) {
+      const max = /local/i.test(pick.set) ? 200 : 100;
+      volumeAction = { mod: pick.mod, set: pick.set, get: pick.get || "getUserVolume", max };
+      volumeModule = pick.mod;
+      dbg("WYKRYTO akcje glosnosci: " + pick.set + " (skala " + max + ")");
+    } else {
+      dbg("nie udalo sie wykryc settera glosnosci w fabrykach");
+    }
   }
 
   let cacheDiagDone = false;
@@ -267,6 +385,16 @@
       else volumeModule = volumeAction.mod;
     }
 
+    // Akcja glosnosci jest w leniwym chunku (laduje sie np. po otwarciu menu
+    // uzytkownika). Wymus jej załadowanie z require.m.
+    if (!volumeAction && cacheCount > 200) {
+      try {
+        discoverVolumeInFactories();
+      } catch (e) {
+        dbg("discoverVolume blad: " + e.message);
+      }
+    }
+
     dbg(
       "scan: modCache=" +
         cacheCount +
@@ -284,19 +412,8 @@
     if (!cacheDiagDone && cacheCount > 200) {
       cacheDiagDone = true;
       try {
-        // obiekt z onSetUserVolume - wypisz jego funkcje
-        const store = findInLoadedCache((o) => hasFn(o, "onSetUserVolume"));
-        if (store) {
-          const fns = Object.keys(store).filter((k) => typeof store[k] === "function");
-          dbg("onSetUserVolume obiekt fns: [" + fns.slice(0, 45).join(",") + "]");
-        } else {
-          dbg("onSetUserVolume: brak w cache");
-        }
         dbg("setLocalVolume w cache: " + !!findInLoadedCache((o) => hasFn(o, "setLocalVolume")));
-        dbg("setUserVolume w cache: " + !!findInLoadedCache((o) => hasFn(o, "setUserVolume")));
-      } catch (e) {
-        dbg("diagVolume blad: " + e.message);
-      }
+      } catch (e) {}
     }
   }
 
