@@ -21,8 +21,6 @@
 
   // Znalezione moduly
   let userStore = null;
-  let volumeModule = null; // kompatybilnosc
-  let volumeAction = null; // { mod, set, get, max }
   let voiceStateStore = null;
   let speakingStore = null;
   let channelStore = null;
@@ -201,48 +199,6 @@
     return null;
   }
 
-  // Jak deepFind, ale zbiera wszystkie trafienia (do capu)
-  function deepFindAll(root, pred, maxDepth, maxNodes, cap) {
-    const found = [];
-    const seen = new Set();
-    const stack = [{ o: root, d: 0 }];
-    let nodes = 0;
-    maxDepth = maxDepth || 5;
-    maxNodes = maxNodes || 8000;
-    cap = cap || 50;
-    while (stack.length && found.length < cap) {
-      const { o, d } = stack.pop();
-      if (!o || seen.has(o)) continue;
-      if (typeof o !== "object" && typeof o !== "function") continue;
-      seen.add(o);
-      if (++nodes > maxNodes) break;
-      let ok = false;
-      try {
-        ok = pred(o);
-      } catch (e) {}
-      if (ok) found.push(o);
-      if (d >= maxDepth) continue;
-      let keys;
-      try {
-        keys = Object.keys(o);
-      } catch (e) {
-        continue;
-      }
-      for (const k of keys) {
-        let v;
-        try {
-          v = o[k];
-        } catch (e) {
-          continue;
-        }
-        if (v && (typeof v === "object" || typeof v === "function")) {
-          stack.push({ o: v, d: d + 1 });
-        }
-      }
-    }
-    return found;
-  }
-
   // Szuka modulu po fragmencie zrodla fabryki (require.m), nastepnie wymaga go
   // i przeszukuje eksporty w poszukiwaniu obiektu spelniajacego predykat.
   function findBySource(marker, pred) {
@@ -268,105 +224,12 @@
     return null;
   }
 
-  let volumeDiscoveryDone = false;
-
-  // Wymusza zaladowanie modulow z require.m ktorych tresc zawiera "volume",
-  // i szuka w nich settera glosnosci uzytkownika.
-  function discoverVolumeInFactories() {
-    if (volumeDiscoveryDone || !webpackRequire || !webpackRequire.m) return;
-    volumeDiscoveryDone = true;
-    const methodNames = new Set();
-    const candidates = [];
-    try {
-      const ids = Object.keys(webpackRequire.m);
-      for (const id of ids) {
-        let src = "";
-        try {
-          src = webpackRequire.m[id].toString();
-        } catch (e) {
-          continue;
-        }
-        if (!/olume/.test(src)) continue;
-        // dodatkowo zawiazane z uzytkownikiem/glosem
-        let mod;
-        try {
-          mod = webpackRequire(id);
-        } catch (e) {
-          continue;
-        }
-        deepFindAll(
-          mod,
-          (o) => {
-            try {
-              const keys = Object.keys(o);
-              for (const k of keys) {
-                if (typeof o[k] !== "function") continue;
-                if (/olume/.test(k)) methodNames.add(k);
-                if (/^(set|update)\w*Volume$/.test(k)) {
-                  const get = keys.find(
-                    (kk) => typeof o[kk] === "function" && /^(get)\w*Volume$/.test(kk)
-                  );
-                  candidates.push({ mod: o, set: k, get: get || null });
-                }
-              }
-            } catch (e) {}
-            return false;
-          },
-          6,
-          4000,
-          40
-        );
-        // wczesne zatrzymanie gdy mamy optymalny setter
-        if (candidates.some((c) => c.set === "setLocalVolume")) break;
-      }
-      dbg("factory volume fns: [" + Array.from(methodNames).slice(0, 40).join(",") + "]");
-      dbg("kandydaci settera: " + candidates.slice(0, 10).map((c) => c.set + (c.get ? "/" + c.get : "")).join(" , "));
-    } catch (e) {
-      dbg("discoverVolume blad: " + e.message);
-    }
-
-    // wybor: preferuj setLocalVolume, potem setUserVolume
-    const prefer = (name) =>
-      candidates.find((c) => c.set === name) ||
-      candidates.find((c) => /local/i.test(c.set));
-    let pick =
-      prefer("setLocalVolume") ||
-      prefer("setUserVolume") ||
-      candidates.find((c) => /local/i.test(c.set)) ||
-      candidates[0];
-    if (pick) {
-      const max = /local/i.test(pick.set) ? 200 : 100;
-      volumeAction = { mod: pick.mod, set: pick.set, get: pick.get || "getUserVolume", max };
-      volumeModule = pick.mod;
-      dbg("WYKRYTO akcje glosnosci: " + pick.set + " (skala " + max + ")");
-    } else {
-      dbg("nie udalo sie wykryc settera glosnosci w fabrykach");
-    }
-  }
-
-  let cacheDiagDone = false;
-
-  function findVolumeAction() {
-    let m;
-    m = findInLoadedCache(
-      (o) => hasFn(o, "setLocalVolume") && (hasFn(o, "getLocalVolume") || hasFn(o, "setLocalMute"))
-    );
-    if (m) return { mod: m, set: "setLocalVolume", get: "getLocalVolume", max: 200 };
-    m = findInLoadedCache((o) => hasFn(o, "setLocalVolume"));
-    if (m) return { mod: m, set: "setLocalVolume", get: "getLocalVolume", max: 200 };
-    m = findInLoadedCache(
-      (o) => hasFn(o, "setUserVolume") && hasFn(o, "getUserVolume")
-    );
-    if (m) return { mod: m, set: "setUserVolume", get: "getUserVolume", max: 100 };
-    m = findInLoadedCache((o) => hasFn(o, "setUserVolume"));
-    if (m) return { mod: m, set: "setUserVolume", get: "getUserVolume", max: 100 };
-    return null;
-  }
-
   function scanModules() {
     const cacheCount = webpackRequire && webpackRequire.c ? Object.keys(webpackRequire.c).length : 0;
     const factoryCount = webpackRequire && webpackRequire.m ? Object.keys(webpackRequire.m).length : 0;
 
+    // Uwaga: akcji per-user glosnosci NIE MA w sklepach Flux (jest w silniku
+    // rozmowy). Glosnosc ustawiamy przez natywne menu kontekstowe (setUserVolumeDOM).
     if (!userStore) {
       userStore =
         findInLoadedCache((o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
@@ -379,21 +242,6 @@
         findBySource("getVoiceStatesForChannel", (o) => hasFn(o, "getVoiceStatesForChannel")) ||
         voiceStateStore;
     }
-    if (!volumeAction) {
-      volumeAction = findVolumeAction();
-      if (!volumeAction) volumeModule = null;
-      else volumeModule = volumeAction.mod;
-    }
-
-    // Akcja glosnosci jest w leniwym chunku (laduje sie np. po otwarciu menu
-    // uzytkownika). Wymus jej załadowanie z require.m.
-    if (!volumeAction && cacheCount > 200) {
-      try {
-        discoverVolumeInFactories();
-      } catch (e) {
-        dbg("discoverVolume blad: " + e.message);
-      }
-    }
 
     dbg(
       "scan: modCache=" +
@@ -404,17 +252,8 @@
         !!userStore +
         " voice=" +
         !!voiceStateStore +
-        " volume=" +
-        !!volumeAction +
-        (volumeAction ? "(" + volumeAction.set + ")" : "")
+        " glosnosc=DOM"
     );
-
-    if (!cacheDiagDone && cacheCount > 200) {
-      cacheDiagDone = true;
-      try {
-        dbg("setLocalVolume w cache: " + !!findInLoadedCache((o) => hasFn(o, "setLocalVolume")));
-      } catch (e) {}
-    }
   }
 
   // ===== API sklepow =====
@@ -507,27 +346,9 @@
     return out;
   }
 
-  // Wartosci naszego suwaka sa 0..100, gdzie 100 = domyslna glosnosc.
-  // Natywny Discord uzywa skali 0..200 (100 = normalna) dla nowego API,
-  // albo 0..100 (1 = normalna) dla starego.
-  function readUserVolume(userId) {
-    try {
-      if (volumeAction && hasFn(volumeAction.mod, volumeAction.get)) {
-        return volumeAction.mod[volumeAction.get](String(userId));
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  function normalizedVolume(userId) {
-    const raw = readUserVolume(userId);
-    if (typeof raw !== "number" || !isFinite(raw) || raw < 0) return 1;
-    if (volumeAction && volumeAction.max === 200) {
-      return Math.max(0, Math.min(1, raw / 100));
-    }
-    // skala 0..1
-    return Math.max(0, Math.min(1, raw));
-  }
+  // Pamietamy ustawione przez nas glosnosci (0..1), bo natywnej wartosci nie
+  // da sie odczytac bez otwierania menu.
+  const userVolumes = {};
 
   function isSpeakingNow(userId, channelId) {
     try {
@@ -543,24 +364,135 @@
     return false;
   }
 
-  function setUserVolume(userId, percent) {
+  // Glosnosc uzytkownika 0..1 (1 = domyslna). Wartosci natywnej nie czytamy
+  // w locie (menu kontekstowe) — zwracamy ostatnio ustawiona przez nas.
+  function normalizedVolume(userId) {
+    const id = String(userId);
+    if (typeof userVolumes[id] === "number") return userVolumes[id];
+    return 1;
+  }
+
+  // ===== USTAWIANIE GLOSNOSCI PRZEZ NATYWNE MENU DISCORDA =====
+  // Znajduje element wiersza osoby na kanale glosowym po jej ID.
+  function findVoiceRow(userId) {
+    const id = String(userId);
+    const rows = document.querySelectorAll(
+      '[class*="voiceUser"], [class*="voice-user"], [class*="userSmall"]'
+    );
+    for (const row of rows) {
+      const info = fiberUserInfo(row);
+      if (info && String(info.id) === id) return row;
+      // fallback po URL awatara
+      const img = row.querySelector ? row.querySelector('img[src*="avatars/"]') : null;
+      if (img) {
+        const m = (img.getAttribute("src") || "").match(/avatars\/(\d{6,})\//);
+        if (m && m[1] === id) return row;
+      }
+    }
+    return null;
+  }
+
+  function openContextMenu(row) {
     try {
-      if (!volumeAction || !volumeAction.mod) {
-        dbg("setUserVolume: brak modulu glosnosci");
+      const ev = new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 2,
+        buttons: 2,
+      });
+      row.dispatchEvent(ev);
+    } catch (e) {}
+  }
+
+  function closeContextMenu() {
+    try {
+      const esc = new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        keyCode: 27,
+        which: 27,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(esc);
+      document.body.dispatchEvent(esc);
+      // kliknij w pustke
+      document.body.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, clientX: 5, clientY: 5 })
+      );
+    } catch (e) {}
+  }
+
+  // Suwak Discorda: poziomy, uzywa aria-valuenow 0..200 (100=norm).
+  // Pozycja: left% = valuenow/2 (bo 200 -> 100% szerokosci).
+  function dragSlider(slider, fraction) {
+    try {
+      const rect = slider.getBoundingClientRect();
+      const cx = rect.left + Math.max(0, Math.min(1, fraction)) * rect.width;
+      const cy = rect.top + rect.height / 2;
+      const opt = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: cx,
+        clientY: cy,
+        button: 0,
+        buttons: 1,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      };
+      const common = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0, buttons: 1 };
+      try { slider.dispatchEvent(new PointerEvent("pointerdown", { ...opt, buttons: 1 })); } catch (e) {}
+      try { slider.dispatchEvent(new MouseEvent("mousedown", common)); } catch (e) {}
+      // kilka move dla plynnosci
+      for (let i = 1; i <= 3; i++) {
+        const mx = rect.left + Math.max(0, Math.min(1, fraction)) * (rect.width * (0.7 + 0.1 * i));
+        try { slider.dispatchEvent(new PointerEvent("pointermove", { ...opt, clientX: cx, clientY: cy })); } catch (e) {}
+        void mx;
+      }
+      try { slider.dispatchEvent(new PointerEvent("pointerup", opt)); } catch (e) {}
+      try { slider.dispatchEvent(new MouseEvent("mouseup", common)); } catch (e) {}
+      try { slider.dispatchEvent(new MouseEvent("click", common)); } catch (e) {}
+    } catch (e) {
+      dbg("dragSlider blad: " + e.message);
+    }
+  }
+
+  function setUserVolume(userId, percent) {
+    const id = String(userId);
+    const p = Math.max(0, Math.min(100, Number(percent) || 0));
+    try {
+      const row = findVoiceRow(id);
+      if (!row) {
+        dbg("setVolume: brak wiersza osoby " + id);
         return false;
       }
-      const p = Math.max(0, Math.min(100, Number(percent) || 0));
-      const id = String(userId);
-      if (volumeAction.max === 200) {
-        // setLocalVolume(id, 0..200) — 100 to domyslna glosnosc
-        volumeAction.mod[volumeAction.set](id, p);
-      } else {
-        // stare API (0..1)
-        volumeAction.mod[volumeAction.set](id, p / 100);
-      }
+      row.scrollIntoView && row.scrollIntoView({ block: "center" });
+      openContextMenu(row);
+
+      let tries = 0;
+      const timer = setInterval(() => {
+        tries++;
+        const slider = document.querySelector("#user-context-user-volume [role='slider']");
+        if (slider) {
+          clearInterval(timer);
+          // nasz suwak 0..100 => Discord valuenow 0..200 => fraction = p/100
+          dragSlider(slider, p / 100);
+          userVolumes[id] = p / 100;
+          const after = parseFloat(slider.getAttribute("aria-valuenow"));
+          dbg("setVolume " + id + " -> " + p + "% (aria=" + after + ")");
+          setTimeout(closeContextMenu, 150);
+        } else if (tries > 20) {
+          clearInterval(timer);
+          dbg("setVolume: nie pojawil sie suwak w menu");
+          closeContextMenu();
+        }
+      }, 80);
       return true;
     } catch (e) {
-      dbg("setUserVolume blad: " + e.message);
+      dbg("setUserVolume DOM blad: " + e.message);
       return false;
     }
   }
@@ -1058,11 +990,7 @@
           dbg("webpack znaleziony");
           scanModules();
         }
-      } else if (
-        !userStore ||
-        !voiceStateStore ||
-        !volumeAction
-      ) {
+      } else if (!userStore || !voiceStateStore) {
         // ponawiaj skan przez pierwsze ~30 s
         if (scanAttempts < 15) {
           scanAttempts++;
@@ -1093,9 +1021,7 @@
             !!userStore +
             " voiceStore=" +
             !!voiceStateStore +
-            " volume=" +
-            !!volumeAction +
-            (volumeAction ? "(" + volumeAction.set + ")" : "") +
+            " glosnosc=DOM" +
             " myId=" +
             (myId ? "tak" : "brak") +
             " channel=" +
