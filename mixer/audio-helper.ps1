@@ -22,8 +22,14 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace MixerAudio {
+
+  internal static class Native {
+    [DllImport("ole32.dll")]
+    public static extern void CoTaskMemFree(IntPtr p);
+  }
 
   [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
   class MMDeviceEnumeratorComObject { }
@@ -54,31 +60,33 @@ namespace MixerAudio {
 
   [Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   public interface IAudioSessionControl {
-    [PreserveSig] int GetState(out int state);
-    [PreserveSig] int GetIconPath(out IntPtr path);
-    [PreserveSig] int GetDisplayName(out IntPtr name);
-    [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, Guid ctx);
-    [PreserveSig] int GetGroupingParam(out Guid param);
-    [PreserveSig] int SetGroupingParam(ref Guid param, Guid ctx);
-    [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);
-    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);
+    [PreserveSig] int GetState(out int state);                                   // 3
+    [PreserveSig] int GetDisplayName(out IntPtr name);                           // 4
+    [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, Guid ctx); // 5
+    [PreserveSig] int GetIconPath(out IntPtr path);                              // 6
+    [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string path, Guid ctx);    // 7
+    [PreserveSig] int GetGroupingParam(out Guid param);                          // 8
+    [PreserveSig] int SetGroupingParam(ref Guid param, Guid ctx);                // 9
+    [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);           // 10
+    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);         // 11
   }
 
   [Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   public interface IAudioSessionControl2 {
-    [PreserveSig] int GetState(out int state);
-    [PreserveSig] int GetIconPath(out IntPtr path);
-    [PreserveSig] int GetDisplayName(out IntPtr name);
-    [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, Guid ctx);
-    [PreserveSig] int GetGroupingParam(out Guid param);
-    [PreserveSig] int SetGroupingParam(ref Guid param, Guid ctx);
-    [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);
-    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);
-    [PreserveSig] int GetSessionIdentifier(out IntPtr id);
-    [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);
-    [PreserveSig] int GetProcessId(out uint pid);
-    [PreserveSig] int IsSystemSoundsSession();
-    [PreserveSig] int SetDuckingPreference(bool optOut);
+    [PreserveSig] int GetState(out int state);                                   // 3
+    [PreserveSig] int GetDisplayName(out IntPtr name);                           // 4
+    [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, Guid ctx); // 5
+    [PreserveSig] int GetIconPath(out IntPtr path);                              // 6
+    [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string path, Guid ctx);    // 7
+    [PreserveSig] int GetGroupingParam(out Guid param);                          // 8
+    [PreserveSig] int SetGroupingParam(ref Guid param, Guid ctx);                // 9
+    [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);           // 10
+    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);         // 11
+    [PreserveSig] int GetSessionIdentifier(out IntPtr id);                       // 12
+    [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);               // 13
+    [PreserveSig] int GetProcessId(out uint pid);                                // 14
+    [PreserveSig] int IsSystemSoundsSession();                                   // 15
+    [PreserveSig] int SetDuckingPreference(bool optOut);                         // 16
   }
 
   [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -104,6 +112,36 @@ namespace MixerAudio {
         else sb.Append(c);
       }
       return sb.ToString();
+    }
+
+    static bool IsPlausiblePid(uint pid) {
+      // PID-y w Windows to male liczby (zwykle < 100000); duze wartosci to smieci
+      return pid > 0 && pid < 1000000;
+    }
+
+    static string PtrToStrAndFree(IntPtr p) {
+      if (p == IntPtr.Zero) return null;
+      try { return Marshal.PtrToStringUni(p); }
+      catch { return null; }
+      finally { try { Native.CoTaskMemFree(p); } catch { } }
+    }
+
+    // PID bywa w GetSessionIdentifier jako "...0.0.1.<pid>}" (dla sesji procesowych)
+    static uint PidFromSessionId(IAudioSessionControl2 sc2) {
+      try {
+        IntPtr p;
+        if (sc2.GetSessionIdentifier(out p) != 0) return 0;
+        string id = PtrToStrAndFree(p);
+        if (string.IsNullOrEmpty(id)) return 0;
+        MatchCollection ms = Regex.Matches(id, "(\\d+)");
+        for (int i = ms.Count - 1; i >= 0; i--) {
+          uint cand;
+          if (uint.TryParse(ms[i].Value, out cand) && IsPlausiblePid(cand)) {
+            return cand;
+          }
+        }
+      } catch { }
+      return 0;
     }
 
     static string ProcName(uint pid) {
@@ -133,9 +171,14 @@ namespace MixerAudio {
             IAudioSessionControl2 sc2;
             try { sc2 = (IAudioSessionControl2)sc; }
             catch { continue; }
+
             uint pid = 0;
-            if (sc2.GetProcessId(out pid) != 0 || pid == 0) continue;
-            if (sc2.IsSystemSoundsSession() == 0) continue;
+            try { sc2.GetProcessId(out pid); } catch { pid = 0; }
+            if (!IsPlausiblePid(pid)) {
+              pid = PidFromSessionId(sc2);
+            }
+            if (!IsPlausiblePid(pid)) continue;
+            try { if (sc2.IsSystemSoundsSession() == 0) continue; } catch { }
             ISimpleAudioVolume vol = sc2 as ISimpleAudioVolume;
             if (vol == null) continue;
             v(pid, ProcName(pid), vol);

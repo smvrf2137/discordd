@@ -146,18 +146,21 @@
     let foundVoice = false;
     let foundSpeaking = false;
     let foundChannel = false;
+    let candidatesScanned = 0;
+    const volumeKeys = [];
+
+    const cache = webpackRequire && webpackRequire.c;
+    const factory = webpackRequire && webpackRequire.m;
+    const cacheCount = cache ? Object.keys(cache).length : 0;
+    const factoryCount = factory ? Object.keys(factory).length : 0;
 
     eachCandidate((m) => {
+      candidatesScanned++;
       if (!m || (typeof m !== "object" && typeof m !== "function")) return;
 
       if (!foundUser && hasFn(m, "getCurrentUser") && hasFn(m, "getUser")) {
         userStore = m;
         foundUser = true;
-      }
-
-      if (!foundVolume && hasFn(m, "setUserVolume")) {
-        volumeModule = m;
-        foundVolume = true;
       }
 
       if (!foundVoice && hasFn(m, "getVoiceStatesForChannel")) {
@@ -169,6 +172,21 @@
         channelStore = m;
         foundChannel = true;
       }
+
+      // modul glosnosci: szukaj po nazwie funkcji (setUserVolume i pokrewne)
+      try {
+        const keys = Object.keys(m);
+        for (const k of keys) {
+          if (typeof m[k] !== "function") continue;
+          if (/set.*volume|setuservolume|setlocalvolume|update.*volume/i.test(k)) {
+            if (volumeKeys.length < 12) volumeKeys.push(k);
+            if (!foundVolume) {
+              volumeModule = m;
+              foundVolume = true;
+            }
+          }
+        }
+      } catch (e) {}
 
       if (!foundSpeaking) {
         try {
@@ -189,16 +207,19 @@
     });
 
     dbg(
-      "scan: user=" +
+      "scan: modCache=" +
+        cacheCount +
+        " modFactory=" +
+        factoryCount +
+        " kandydaci=" +
+        candidatesScanned +
+        " | user=" +
         foundUser +
         " volume=" +
         foundVolume +
         " voice=" +
         foundVoice +
-        " speaking=" +
-        foundSpeaking +
-        " channel=" +
-        foundChannel
+        (volumeKeys.length ? " volFns=" + volumeKeys.join(",") : "")
     );
   }
 
@@ -345,11 +366,62 @@
   function voiceDataItems() {
     const items = [];
     try {
+      // glowny selektor
       document
         .querySelectorAll('[data-list-item-id^="voice-"]')
         .forEach((el) => items.push(el));
+
+      // fallback: ludzie na kanale glosowym bywaja w kontenerach z avatarem
+      if (items.length === 0) {
+        const voicePanel =
+          document.querySelector('[class*="voiceUsers"], [class*="voice-users"], [class*="voiceChannel"], [class*="voice-channel"], aside, nav');
+        if (voicePanel) {
+          voicePanel
+            .querySelectorAll('[data-list-item-id]')
+            .forEach((el) => {
+              const id = el.getAttribute("data-list-item-id") || "";
+              if (/voice|user|channel/i.test(id)) items.push(el);
+            });
+        }
+      }
     } catch (e) {}
     return items;
+  }
+
+  let domDumpDone = false;
+  function dumpVoiceDom() {
+    if (domDumpDone) return;
+    try {
+      // prefiksy wszystkich data-list-item-id
+      const prefixes = {};
+      let total = 0;
+      document.querySelectorAll("[data-list-item-id]").forEach((el) => {
+        total++;
+        const id = el.getAttribute("data-list-item-id") || "";
+        const prefix = id.split("-")[0] + "-" + (id.split("-")[1] || "");
+        prefixes[prefix] = (prefixes[prefix] || 0) + 1;
+      });
+      dbg("DOM data-list-item-id: " + total + " | " + JSON.stringify(prefixes));
+
+      // przykladowe elementy z klasa zawierajaca "voice"
+      const vEls = document.querySelectorAll('[class*="voice" i]');
+      let count = 0;
+      vEls.forEach((el) => {
+        if (count >= 6) return;
+        const cls =
+          el.className && el.className.baseVal !== undefined
+            ? el.className.baseVal
+            : String(el.className || "");
+        const tag = el.tagName.toLowerCase();
+        const dli = el.getAttribute("data-list-item-id");
+        const txt = (el.textContent || "").trim().slice(0, 30);
+        dbg("voice-el <" + tag + " class='" + cls.slice(0, 70) + "'" + (dli ? " dli='" + dli + "'" : "") + "> txt='" + txt + "'");
+        count++;
+      });
+      domDumpDone = true;
+    } catch (e) {
+      dbg("dumpVoiceDom blad: " + e.message);
+    }
   }
 
   function userIdFromElement(el) {
@@ -431,6 +503,151 @@
     return { speaking, muted };
   }
 
+  // Alternatywne zrodlo: awatary z URL zawierajacym /avatars/<userId>/
+  function collectAvatarUsers(myId) {
+    const users = new Map();
+    try {
+      const imgs = document.querySelectorAll('img[src*="avatars/"]');
+      imgs.forEach((img) => {
+        const src = img.getAttribute("src") || "";
+        const m = src.match(/avatars\/(\d{6,})\//);
+        if (!m) return;
+        const id = m[1];
+        if (myId && id === myId) return;
+        if (users.has(id)) return;
+
+        // wspinamy sie do "wiersza" uzytkownika
+        let scope =
+          (img.closest && img.closest('[data-list-item-id^="voice-"]')) ||
+          (img.closest && img.closest("li")) ||
+          (img.closest &&
+            img.closest('[class*="voiceUser"], [class*="voice-user"], [class*="user"], [role="listitem"], [class*="container"]')) ||
+          img.parentElement;
+        if (!scope) scope = img.parentElement;
+
+        let name = null;
+        try {
+          const nameEl =
+            scope.querySelector('[class*="username"], [class*="userName"], [class*="name_"]') ||
+            scope.querySelector("span");
+          if (nameEl) {
+            const t = nameEl.textContent.trim();
+            if (t && t.length < 40 && !/^\d/.test(t)) name = t;
+          }
+        } catch (e) {}
+
+        users.set(id, {
+          id,
+          name: userName(id) || name || "User " + id.slice(-4),
+          volume: normalizedVolume(id),
+          muted: false,
+          speaking: false,
+        });
+      });
+    } catch (e) {}
+    return users;
+  }
+
+  // Moje ID z dolnego panelu konta (awatar na koncu listy znajomych/serwera)
+  function getMyIdFromDom() {
+    try {
+      // panel konta na dole paska kanalow
+      const panel =
+        document.querySelector('[class*="panels"]') ||
+        document.querySelector('section[class*="panel"]');
+      if (panel) {
+        const img = panel.querySelector('img[src*="avatars/"]');
+        if (img) {
+          const m = (img.getAttribute("src") || "").match(/avatars\/(\d{6,})\//);
+          if (m) return m[1];
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // Glowne zrodlo DOM: uzytkownicy na kanale glosowym. Klasy Discorda maja
+  // czytelne prefiksy (np. menu_c1e9c4, slider_a562c8), wiec wiersze/kafelki
+  // osob rozmowy maja w klasie "voice"/"tile"/"participant". Dla kazdego awatara
+  // wspinamy sie do NAJBLIZSZEGO waskiego kontenera (max 2 awatary) z takim
+  // prefiksem - to daje per-uzytkownika, a pomija czat i liste znajomych.
+  const VOICE_RE = /voice|tile|participant|stage|connected|speaker/i;
+  const NONVOICE_RE = /message|chat|cozy|comment|member|people|friend|privatechannel/i;
+
+  function classOf(el) {
+    try {
+      return el && el.className && el.className.baseVal !== undefined
+        ? el.className.baseVal
+        : String((el && el.className) || "");
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function nameWithin(scope) {
+    if (!scope) return null;
+    const candidates = scope.querySelectorAll
+      ? scope.querySelectorAll("span, div")
+      : [];
+    let best = null;
+    for (const el of candidates) {
+      const cls = classOf(el);
+      if (/name|username|displayName/i.test(cls)) {
+        const t = (el.textContent || "").trim();
+        if (t && t.length < 40 && /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ0-9]/i.test(t)) return t;
+      }
+      if (!best) {
+        const t = (el.textContent || "").trim();
+        if (t && t.length < 32 && /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/i.test(t)) best = t;
+      }
+    }
+    return best;
+  }
+
+  function collectVoiceParticipants(myId) {
+    const users = new Map();
+    try {
+      const imgs = document.querySelectorAll('img[src*="avatars/"]');
+      imgs.forEach((img) => {
+        const src = img.getAttribute("src") || "";
+        const m = src.match(/avatars\/(\d{6,})\//);
+        if (!m) return;
+        const id = m[1];
+        if (myId && id === myId) return;
+
+        // najblizszy waski kontener z prefiksem glosowym
+        let best = null;
+        let node = img.parentElement;
+        for (let hops = 0; hops < 9 && node; hops++) {
+          const cls = classOf(node);
+          if (NONVOICE_RE.test(cls)) break; // wszedl w kontener czatu/czlonkow
+          const avatarCount = node.querySelectorAll
+            ? node.querySelectorAll('img[src*="avatars/"]').length
+            : 0;
+          if (VOICE_RE.test(cls) && avatarCount >= 1 && avatarCount <= 2) {
+            best = node;
+            break;
+          }
+          node = node.parentElement;
+        }
+
+        if (best) {
+          users.set(id, {
+            id,
+            name:
+              nameWithin(best) || userName(id) || "User " + id.slice(-4),
+            volume: normalizedVolume(id),
+            muted: false,
+            speaking: false,
+          });
+        }
+      });
+    } catch (e) {
+      dbg("collectVoiceParticipants blad: " + e.message);
+    }
+    return users;
+  }
+
   let lastDomDbg = "";
   function collectDomUsers(myId) {
     const users = new Map();
@@ -471,7 +688,8 @@
   function collectUsers() {
     const users = new Map();
     const me = getCurrentUser();
-    const myId = me && me.id ? String(me.id) : null;
+    const myId =
+      (me && me.id ? String(me.id) : null) || getMyIdFromDom();
     const channelId = getMyVoiceChannelId();
 
     // 1) ze sklepu stanow glosowych
@@ -490,7 +708,7 @@
       }
     }
 
-    // 2) z DOM
+    // 2) z DOM (data-list-item-id)
     const dom = collectDomUsers(myId);
     for (const [id, u] of dom) {
       if (!users.has(id)) users.set(id, u);
@@ -499,6 +717,23 @@
         ex.muted = ex.muted || u.muted;
         ex.speaking = ex.speaking || u.speaking;
       }
+    }
+
+    // 3) z DOM - uczestnicy rozmowy (wiersze w pasku kanalow + kafelki rozmowy)
+    const participants = collectVoiceParticipants(myId);
+    for (const [id, u] of participants) {
+      if (!users.has(id)) users.set(id, u);
+      else {
+        const ex = users.get(id);
+        ex.muted = ex.muted || u.muted;
+        ex.speaking = ex.speaking || u.speaking;
+        if (ex.name.startsWith("User ") && !u.name.startsWith("User ")) {
+          ex.name = u.name;
+        }
+      }
+    }
+    if (participants.size) {
+      dbg("DOM rozmowa: uczestnikow " + participants.size);
     }
 
     return Array.from(users.values());
@@ -536,6 +771,8 @@
 
       tickCount++;
       if (tickCount % 7 === 0) {
+        const myId =
+          (getCurrentUser() && getCurrentUser().id) || getMyIdFromDom();
         dbg(
           "heartbeat: users=" +
             users.length +
@@ -547,11 +784,19 @@
             !!voiceStateStore +
             " volumeModule=" +
             !!volumeModule +
+            " myId=" +
+            (myId ? "tak" : "brak") +
             " channel=" +
             (getMyVoiceChannelId() || "brak") +
             " domVoice=" +
-            voiceDataItems().length
+            voiceDataItems().length +
+            " uczestnicyDOM=" +
+            collectVoiceParticipants(myId).size
         );
+      }
+      // jednorazowy zrzut struktury DOM kanalu glosowego
+      if (tickCount === 3) {
+        dumpVoiceDom();
       }
     } catch (e) {
       dbg("tick blad: " + e.message);
