@@ -15,6 +15,12 @@
   }
 
   dbg("skrypt zaladowany, bridge=" + (bridge ? "tak" : "nie"));
+  dbg(
+    "UA=" +
+      navigator.userAgent.slice(0, 120) +
+      " | getDisplayMedia=" +
+      (!!navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia)
+  );
   if (!bridge) return;
 
   let webpackRequire = null;
@@ -424,44 +430,57 @@
     } catch (e) {}
   }
 
-  // Ustawia wartosc natywnego suwaka Discorda ZDARZENIAMI KLAWIATURY
-  // (role=slider obsluguje Home/End/strzalki). To jest niezawodny sposob
-  // zatwierdzania wartosci (przeciaganie mysza syntetycznymi eventami nie
-  // commitowalo i suwak wracal do 100).
-  function setSliderByKeyboard(slider, percent) {
-    const p = Math.max(0, Math.min(100, Math.round(percent)));
-    const fire = (key, code, keyCode) => {
-      const opt = {
-        key,
-        code,
-        keyCode,
-        which: keyCode,
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      };
-      try {
-        slider.dispatchEvent(new KeyboardEvent("keydown", opt));
-        slider.dispatchEvent(new KeyboardEvent("keyup", opt));
-      } catch (e) {}
+  // Wyslanie klawisza do suwaka (keydown + keyup).
+  function fireKey(el, key, code, keyCode) {
+    const opt = {
+      key,
+      code,
+      keyCode,
+      which: keyCode,
+      bubbles: true,
+      cancelable: true,
+      view: window,
     };
+    try {
+      el.dispatchEvent(new KeyboardEvent("keydown", opt));
+      el.dispatchEvent(new KeyboardEvent("keyup", opt));
+    } catch (e) {}
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Ustawia wartosc natywnego suwaka Discorda ZDARZENIAMI KLAWIATURY.
+  // Kluczowe: klawisze wysylane z malymi odstepami czasu, bo synchroniczna
+  // seria byla "sklejana" przez Reacta i commitowal sie tylko ulamek krokow.
+  // Home = 0%, PageUp = +10, ArrowRight = +1 (wewnetrzna skala Discorda).
+  async function setSliderByKeyboard(slider, percent) {
+    const p = Math.max(0, Math.min(100, Math.round(percent)));
     try {
       try {
         slider.focus();
       } catch (e) {}
-      fire("Home", "Home", 36);
-      // PageUp = +10 (10 razy), ArrowRight = +1
+      await sleep(40);
+      fireKey(slider, "Home", "Home", 36);
+      await sleep(40);
+
       const tens = Math.floor(p / 10);
       const rest = p % 10;
-      for (let i = 0; i < tens; i++) fire("PageUp", "PageUp", 33);
-      for (let i = 0; i < rest; i++) fire("ArrowRight", "ArrowRight", 39);
+      for (let i = 0; i < tens; i++) {
+        fireKey(slider, "PageUp", "PageUp", 33);
+        await sleep(28);
+      }
+      for (let i = 0; i < rest; i++) {
+        fireKey(slider, "ArrowRight", "ArrowRight", 39);
+        await sleep(28);
+      }
+      await sleep(40);
     } catch (e) {
       dbg("setSliderByKeyboard blad: " + e.message);
     }
   }
 
-  function dragSlider(slider, fraction) {
-    setSliderByKeyboard(slider, Math.round(fraction * 100));
+  async function dragSlider(slider, fraction) {
+    await setSliderByKeyboard(slider, Math.round(fraction * 100));
   }
 
   function setUserVolume(userId, percent) {
@@ -477,18 +496,18 @@
       openContextMenu(row);
 
       let tries = 0;
-      const timer = setInterval(() => {
+      const timer = setInterval(async () => {
         tries++;
         const slider = document.querySelector("#user-context-user-volume [role='slider']");
         if (slider) {
           clearInterval(timer);
-          // nasz suwak 0..100 => Discord valuenow 0..200 => fraction = p/100
-          dragSlider(slider, p / 100);
+          // nasz suwak 0..100 ustawiamy klawiszami; Discord sam trzyma swoja skale
+          await dragSlider(slider, p / 100);
           userVolumes[id] = p / 100;
           const after = parseFloat(slider.getAttribute("aria-valuenow"));
           dbg("setVolume " + id + " -> " + p + "% (aria=" + after + ")");
-          setTimeout(closeContextMenu, 150);
-        } else if (tries > 20) {
+          closeContextMenu();
+        } else if (tries > 25) {
           clearInterval(timer);
           dbg("setVolume: nie pojawil sie suwak w menu");
           closeContextMenu();

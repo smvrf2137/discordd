@@ -558,6 +558,10 @@ function createMainWindow() {
 
   mainWindow.addBrowserView(discordView);
   updateDiscordBounds();
+
+  // Discord zezwala na wspoldzielenie ekranu tylko dla Chrome/Edge/aplikacji;
+  // domyslny UA Electrona (z "Electron/x.y") jest traktowany jak nieobslugiwany.
+  discordView.webContents.setUserAgent(USER_AGENT);
   discordView.webContents.loadURL("https://discord.com/app");
 
   discordView.webContents.on("did-finish-load", () => {
