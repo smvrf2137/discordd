@@ -374,84 +374,6 @@ const RPC_TRACKING_JS = `
 })();
 `;
 
-// Glosnosc SoundClouda: mikser -> IPC -> ten skrypt -> element audio na stronie.
-// Electron caly dzwiek odtwarza przez jedna sesje WASAPI, wiec per-widok
-// mozna go przycisnac tylko bezposrednio na elemencie <audio>/<video>.
-const SOUNDCLOUD_VOLUME_JS = `
-(() => {
-  if (window.__scVolumeInjected) return;
-  window.__scVolumeInjected = true;
-
-  var target = 1; // 0..1
-
-  function apply(el) {
-    try {
-      if (el && typeof el.volume === "number" && Math.abs(el.volume - target) > 0.005) {
-        el.volume = target;
-      }
-    } catch (e) {}
-  }
-
-  function scan(root) {
-    try {
-      var nodes = (root || document).querySelectorAll
-        ? (root || document).querySelectorAll("audio,video")
-        : [];
-      nodes.forEach(apply);
-    } catch (e) {}
-  }
-
-  function init() {
-    // istniejace elementy
-    scan(document);
-
-    // nowe elementy wstawiane przy zmianie utworu/odtwarzacza
-    try {
-      var obs = new MutationObserver(function (muts) {
-        for (var i = 0; i < muts.length; i++) {
-          var added = muts[i].addedNodes;
-          if (!added) continue;
-          for (var j = 0; j < added.length; j++) {
-            var n = added[j];
-            if (n && n.nodeType === 1) {
-              if (n.tagName === "AUDIO" || n.tagName === "VIDEO") apply(n);
-              else scan(n);
-            }
-          }
-        }
-        // i na wszelki wypadek wszystko (zmiana utworu bywa bez nowego DOM)
-        scan(document);
-      });
-      obs.observe(document.documentElement || document.body, {
-        childList: true,
-        subtree: true,
-      });
-    } catch (e) {}
-
-    setInterval(function () {
-      scan(document);
-    }, 800);
-
-    var bridge = window.electronNowPlaying;
-    if (bridge && typeof bridge.onSetVolume === "function") {
-      try {
-        bridge.onSetVolume(function (pct) {
-          var p = Number(pct);
-          if (!isFinite(p)) return;
-          target = Math.max(0, Math.min(100, p)) / 100;
-          scan(document);
-        });
-      } catch (e) {}
-    }
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
-})();
-`;
 const DISCORD_CLIENT_ID = "1444730971579748525";
 
 RPC.register(DISCORD_CLIENT_ID);
@@ -771,11 +693,15 @@ function createOverlay() {
   // lokalny header z X
   overlayWindow.loadFile(path.join(__dirname, "overlay", "index.html"));
 
-  // SoundCloud
+  // SoundCloud. contextIsolation wylaczone, by preload mogl przechwycic
+  // graf Web Audio strony (AudioNode.connect) przed utworzeniem AudioContext
+  // przez SoundClouda - inaczej suwak glosnosci nie dziala (CSP blokuje
+  // inline script, executeJavaScript dziala w odizolowanym swiecie).
+  // nodeIntegration pozostaje wylaczone (strona nie dostaje Node).
   soundcloudView = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, "soundcloud-preload.js"),
-      contextIsolation: true,
+      contextIsolation: false,
       nodeIntegration: false,
     },
   });
@@ -807,15 +733,6 @@ function createOverlay() {
     wc.insertCSS(INJECTED_CSS).catch(() => {});
     wc.executeJavaScript(INJECTED_JS).catch(() => {});
     wc.executeJavaScript(RPC_TRACKING_JS).catch(() => {});
-    wc.executeJavaScript(SOUNDCLOUD_VOLUME_JS).catch(() => {});
-    // jesli mikser juz ustawil glosnosc przed zaladowaniem strony
-    if (soundcloudVolume != null) {
-      sendSoundcloudVolume(soundcloudVolume);
-    }
-  });
-
-  wc.on("did-navigate", () => {
-    wc.executeJavaScript(SOUNDCLOUD_VOLUME_JS).catch(() => {});
   });
 
   overlayWindow.on("resize", () => {
@@ -915,8 +832,8 @@ function sendToMixer(channel, payload) {
 // Electron/Electron-Chromium kieruje cale audio (Discord + SoundCloud) przez
 // JEDNA sesje WASAPI, wiec nie da sie rozdzielic glosnosci po procesach.
 // SoundCloud dostaje wiec wlasny, wirtualny suwak: glosnosc ustawiana jest
-// bezposrednio na stronie (SOUNDCLOUD_VOLUME_JS), a do miksera dokladamy
-// sztuczny wpis.
+// bezposrednio na stronie (soundcloud-preload.js: GainNode w swiecie strony),
+// a do miksera dokladamy sztuczny wpis.
 function soundcloudVirtualApp() {
   const vol = soundcloudVolume == null ? 1 : soundcloudVolume / 100;
   return {
