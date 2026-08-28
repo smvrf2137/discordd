@@ -68,3 +68,17 @@ body {
   background: #35373c;
   color: #ff7a33;
 }
+
+.window-button.mixer {
+  width: auto;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #949ba4;
+  border-left: 1px solid #2b2d31;
+}
+
+.window-button.mixer:hover {
+  background: #35373c;
+  color: #f2f3f5;
+}

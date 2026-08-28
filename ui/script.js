@@ -13,3 +13,7 @@ function closeWindow() {
 function toggleOverlay() {
   window.electronAPI.toggleOverlay();
 }
+
+function toggleMixer() {
+  window.electronAPI.toggleMixer();
+}

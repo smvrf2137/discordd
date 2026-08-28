@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send("toggle-overlay");
   },
 
+  toggleMixer: () => {
+    ipcRenderer.send("toggle-mixer");
+  },
+
   minimize: () => {
     ipcRenderer.send("window-minimize");
   },
@@ -20,4 +24,4 @@ contextBridge.exposeInMainWorld("electronAPI", {
   closeWindow: () => {
     ipcRenderer.send("window-close");
   },
-});
+});
