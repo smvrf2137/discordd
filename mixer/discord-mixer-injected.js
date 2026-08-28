@@ -140,86 +140,110 @@
     }
   }
 
-  function scanModules() {
-    let foundUser = false;
-    let foundVolume = false;
-    let foundVoice = false;
-    let foundSpeaking = false;
-    let foundChannel = false;
-    let candidatesScanned = 0;
-    const volumeKeys = [];
-
-    const cache = webpackRequire && webpackRequire.c;
-    const factory = webpackRequire && webpackRequire.m;
-    const cacheCount = cache ? Object.keys(cache).length : 0;
-    const factoryCount = factory ? Object.keys(factory).length : 0;
-
-    eachCandidate((m) => {
-      candidatesScanned++;
-      if (!m || (typeof m !== "object" && typeof m !== "function")) return;
-
-      if (!foundUser && hasFn(m, "getCurrentUser") && hasFn(m, "getUser")) {
-        userStore = m;
-        foundUser = true;
-      }
-
-      if (!foundVoice && hasFn(m, "getVoiceStatesForChannel")) {
-        voiceStateStore = m;
-        foundVoice = true;
-      }
-
-      if (!foundChannel && hasFn(m, "getChannel") && hasFn(m, "getChannels")) {
-        channelStore = m;
-        foundChannel = true;
-      }
-
-      // modul glosnosci: szukaj po nazwie funkcji (setUserVolume i pokrewne)
+  // BFS po obiekcie (i zagniezdzonych polach) - zwraca pierwszy spelniajacy predykat
+  function deepFind(root, pred) {
+    const seen = new Set();
+    const stack = [{ o: root, d: 0 }];
+    while (stack.length) {
+      const { o, d } = stack.pop();
+      if (!o || seen.has(o)) continue;
+      if (typeof o !== "object" && typeof o !== "function") continue;
+      seen.add(o);
+      let ok = false;
       try {
-        const keys = Object.keys(m);
-        for (const k of keys) {
-          if (typeof m[k] !== "function") continue;
-          if (/set.*volume|setuservolume|setlocalvolume|update.*volume/i.test(k)) {
-            if (volumeKeys.length < 12) volumeKeys.push(k);
-            if (!foundVolume) {
-              volumeModule = m;
-              foundVolume = true;
-            }
-          }
-        }
+        ok = pred(o);
       } catch (e) {}
-
-      if (!foundSpeaking) {
-        try {
-          if (
-            hasFn(m, "isSpeaking") ||
-            (hasFn(m, "getSpeakingStates") && hasFn(m, "subscribe"))
-          ) {
-            const keys = Object.keys(m).filter(
-              (k) => typeof m[k] === "function" && /speak|voice/i.test(k)
-            );
-            if (keys.length) {
-              speakingStore = m;
-              foundSpeaking = true;
-            }
-          }
-        } catch (e) {}
+      if (ok) return o;
+      if (d >= 4) continue;
+      let keys;
+      try {
+        keys = Object.keys(o);
+      } catch (e) {
+        continue;
       }
-    });
+      for (const k of keys) {
+        let v;
+        try {
+          v = o[k];
+        } catch (e) {
+          continue;
+        }
+        if (v && (typeof v === "object" || typeof v === "function")) {
+          stack.push({ o: v, d: d + 1 });
+        }
+      }
+    }
+    return null;
+  }
+
+  // Szuka modulu po fragmencie zrodla fabryki (require.m), nastepnie wymaga go
+  // i przeszukuje eksporty w poszukiwaniu obiektu spelniajacego predykat.
+  function findBySource(marker, pred) {
+    if (!webpackRequire || !webpackRequire.m) return null;
+    const factories = webpackRequire.m;
+    for (const id of Object.keys(factories)) {
+      let src = "";
+      try {
+        src = factories[id] ? factories[id].toString() : "";
+      } catch (e) {
+        continue;
+      }
+      if (!src || src.indexOf(marker) === -1) continue;
+      let mod;
+      try {
+        mod = webpackRequire(id);
+      } catch (e) {
+        continue;
+      }
+      const found = deepFind(mod, pred);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function scanModules() {
+    const cacheCount = webpackRequire && webpackRequire.c ? Object.keys(webpackRequire.c).length : 0;
+    const factoryCount = webpackRequire && webpackRequire.m ? Object.keys(webpackRequire.m).length : 0;
+
+    // 1) Najpewniejsze: szukanie po tresci fabryk (leniwe moduly sa w require.m)
+    if (!userStore) {
+      userStore =
+        findBySource("getCurrentUser", (o) => hasFn(o, "getCurrentUser") && hasFn(o, "getUser")) ||
+        userStore;
+    }
+    if (!voiceStateStore) {
+      voiceStateStore =
+        findBySource("getVoiceStatesForChannel", (o) => hasFn(o, "getVoiceStatesForChannel")) ||
+        voiceStateStore;
+    }
+    if (!volumeModule) {
+      volumeModule =
+        findBySource("setUserVolume", (o) => hasFn(o, "setUserVolume")) ||
+        findBySource("updateUserVolume", (o) => /volume/i.test(Object.keys(o).join(",")) && hasFn(o, "setUserVolume")) ||
+        volumeModule;
+    }
+
+    // 2) Fallback: skan joca zaladowanego cache
+    if (!userStore || !voiceStateStore || !volumeModule) {
+      eachCandidate((m) => {
+        if (!m || (typeof m !== "object" && typeof m !== "function")) return;
+        if (!userStore && hasFn(m, "getCurrentUser") && hasFn(m, "getUser")) userStore = m;
+        if (!voiceStateStore && hasFn(m, "getVoiceStatesForChannel")) voiceStateStore = m;
+        if (!volumeModule && hasFn(m, "setUserVolume")) volumeModule = m;
+      });
+    }
 
     dbg(
       "scan: modCache=" +
         cacheCount +
         " modFactory=" +
         factoryCount +
-        " kandydaci=" +
-        candidatesScanned +
         " | user=" +
-        foundUser +
-        " volume=" +
-        foundVolume +
+        !!userStore +
         " voice=" +
-        foundVoice +
-        (volumeKeys.length ? " volFns=" + volumeKeys.join(",") : "")
+        !!voiceStateStore +
+        " volume=" +
+        !!volumeModule
     );
   }
 
@@ -503,51 +527,6 @@
     return { speaking, muted };
   }
 
-  // Alternatywne zrodlo: awatary z URL zawierajacym /avatars/<userId>/
-  function collectAvatarUsers(myId) {
-    const users = new Map();
-    try {
-      const imgs = document.querySelectorAll('img[src*="avatars/"]');
-      imgs.forEach((img) => {
-        const src = img.getAttribute("src") || "";
-        const m = src.match(/avatars\/(\d{6,})\//);
-        if (!m) return;
-        const id = m[1];
-        if (myId && id === myId) return;
-        if (users.has(id)) return;
-
-        // wspinamy sie do "wiersza" uzytkownika
-        let scope =
-          (img.closest && img.closest('[data-list-item-id^="voice-"]')) ||
-          (img.closest && img.closest("li")) ||
-          (img.closest &&
-            img.closest('[class*="voiceUser"], [class*="voice-user"], [class*="user"], [role="listitem"], [class*="container"]')) ||
-          img.parentElement;
-        if (!scope) scope = img.parentElement;
-
-        let name = null;
-        try {
-          const nameEl =
-            scope.querySelector('[class*="username"], [class*="userName"], [class*="name_"]') ||
-            scope.querySelector("span");
-          if (nameEl) {
-            const t = nameEl.textContent.trim();
-            if (t && t.length < 40 && !/^\d/.test(t)) name = t;
-          }
-        } catch (e) {}
-
-        users.set(id, {
-          id,
-          name: userName(id) || name || "User " + id.slice(-4),
-          volume: normalizedVolume(id),
-          muted: false,
-          speaking: false,
-        });
-      });
-    } catch (e) {}
-    return users;
-  }
-
   // Moje ID z dolnego panelu konta (awatar na koncu listy znajomych/serwera)
   function getMyIdFromDom() {
     try {
@@ -566,14 +545,6 @@
     return null;
   }
 
-  // Glowne zrodlo DOM: uzytkownicy na kanale glosowym. Klasy Discorda maja
-  // czytelne prefiksy (np. menu_c1e9c4, slider_a562c8), wiec wiersze/kafelki
-  // osob rozmowy maja w klasie "voice"/"tile"/"participant". Dla kazdego awatara
-  // wspinamy sie do NAJBLIZSZEGO waskiego kontenera (max 2 awatary) z takim
-  // prefiksem - to daje per-uzytkownika, a pomija czat i liste znajomych.
-  const VOICE_RE = /voice|tile|participant|stage|connected|speaker/i;
-  const NONVOICE_RE = /message|chat|cozy|comment|member|people|friend|privatechannel/i;
-
   function classOf(el) {
     try {
       return el && el.className && el.className.baseVal !== undefined
@@ -584,64 +555,120 @@
     }
   }
 
-  function nameWithin(scope) {
-    if (!scope) return null;
-    const candidates = scope.querySelectorAll
-      ? scope.querySelectorAll("span, div")
-      : [];
-    let best = null;
-    for (const el of candidates) {
-      const cls = classOf(el);
-      if (/name|username|displayName/i.test(cls)) {
-        const t = (el.textContent || "").trim();
-        if (t && t.length < 40 && /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ0-9]/i.test(t)) return t;
-      }
-      if (!best) {
-        const t = (el.textContent || "").trim();
-        if (t && t.length < 32 && /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/i.test(t)) best = t;
-      }
-    }
-    return best;
+  // ===== React Fiber =====
+  function getFiber(el) {
+    if (!el) return null;
+    const key = Object.keys(el).find(
+      (k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")
+    );
+    return key ? el[key] : null;
   }
 
+  // Szuka w propsach wlokna obiektu uzytkownika ({id, username/globalName...})
+  function userFromProps(props) {
+    if (!props || typeof props !== "object") return null;
+    for (const k of ["user", "author"]) {
+      const u = props[k];
+      if (u && (u.id || u.Id)) return u;
+    }
+    // voiceState bywa { userId, nick, mute, ... }
+    if (props.voiceState) {
+      const vs = props.voiceState;
+      if (vs.userId) return { id: vs.userId, _muted: !!(vs.mute || vs.selfMute) };
+    }
+    // niektre wiersze trzymaja bezposrednio userId
+    if (props.userId) return { id: props.userId };
+    return null;
+  }
+
+  // Przechodzi po wloknie w gore i wydobywa dane uzytkownika + mowi/wyciszony
+  function fiberUserInfo(el) {
+    let fiber = getFiber(el);
+    let hops = 0;
+    while (fiber && hops < 20) {
+      let p = null;
+      try {
+        p = fiber.memoizedProps || fiber.pendingProps;
+      } catch (e) {}
+      if (p) {
+        const u = userFromProps(p);
+        if (u && u.id) {
+          const id = String(u.id);
+          const name =
+            u.globalName ||
+            u.displayName ||
+            u.username ||
+            u.global_name ||
+            (typeof p.name === "string" ? p.name : null) ||
+            null;
+          let muted = !!u._muted;
+          let speaking = false;
+          try {
+            muted = muted || !!(p.muted || (p.voiceState && (p.voiceState.mute || p.voiceState.selfMute)));
+            speaking = !!(p.speaking || (p.voiceState && p.voiceState.speaking));
+          } catch (e) {}
+          return { id, name, muted, speaking };
+        }
+      }
+      fiber = fiber.return;
+      hops++;
+    }
+    return null;
+  }
+
+  // Glowne zrodlo DOM: wiersze osob na kanale glosowym (klasa voiceUser__),
+  // z danymi wyciaganymi z wlokien Reacta (dziala tez dla domyslnych awatarow).
   function collectVoiceParticipants(myId) {
     const users = new Map();
     try {
-      const imgs = document.querySelectorAll('img[src*="avatars/"]');
-      imgs.forEach((img) => {
-        const src = img.getAttribute("src") || "";
-        const m = src.match(/avatars\/(\d{6,})\//);
-        if (!m) return;
-        const id = m[1];
-        if (myId && id === myId) return;
+      const rows = document.querySelectorAll('[class*="voiceUser"], [class*="voice-user"]');
+      rows.forEach((row) => {
+        const info = fiberUserInfo(row);
+        if (!info || !info.id) return;
+        if (myId && info.id === String(myId)) return;
 
-        // najblizszy waski kontener z prefiksem glosowym
-        let best = null;
-        let node = img.parentElement;
-        for (let hops = 0; hops < 9 && node; hops++) {
-          const cls = classOf(node);
-          if (NONVOICE_RE.test(cls)) break; // wszedl w kontener czatu/czlonkow
-          const avatarCount = node.querySelectorAll
-            ? node.querySelectorAll('img[src*="avatars/"]').length
-            : 0;
-          if (VOICE_RE.test(cls) && avatarCount >= 1 && avatarCount <= 2) {
-            best = node;
-            break;
+        // nazwa z DOM jako uzupelnienie
+        let domName = null;
+        try {
+          const span = row.querySelector("span");
+          if (span) {
+            const t = (span.textContent || "").trim();
+            if (t && t.length < 40) domName = t;
           }
-          node = node.parentElement;
-        }
+        } catch (e) {}
 
-        if (best) {
-          users.set(id, {
-            id,
-            name:
-              nameWithin(best) || userName(id) || "User " + id.slice(-4),
-            volume: normalizedVolume(id),
-            muted: false,
-            speaking: false,
-          });
-        }
+        users.set(info.id, {
+          id: info.id,
+          name:
+            info.name ||
+            userName(info.id) ||
+            domName ||
+            "User " + info.id.slice(-4),
+          volume: normalizedVolume(info.id),
+          muted: info.muted,
+          speaking: info.speaking,
+        });
       });
+
+      // Uzupelnienie: kafelki rozmowy w glownym widoku (participant/tile)
+      if (users.size === 0) {
+        const tiles = document.querySelectorAll(
+          '[class*="participant"], [class*="tile_"], [class*="speaker"]'
+        );
+        tiles.forEach((tile) => {
+          const info = fiberUserInfo(tile);
+          if (!info || !info.id) return;
+          if (myId && info.id === String(myId)) return;
+          if (users.has(info.id)) return;
+          users.set(info.id, {
+            id: info.id,
+            name: info.name || userName(info.id) || "User " + info.id.slice(-4),
+            volume: normalizedVolume(info.id),
+            muted: info.muted,
+            speaking: info.speaking,
+          });
+        });
+      }
     } catch (e) {
       dbg("collectVoiceParticipants blad: " + e.message);
     }
