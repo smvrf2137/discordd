@@ -927,12 +927,24 @@ ipcMain.on("mixer-set-app-volume", (_event, data) => {
   if (audioControl) audioControl.setVolume(data.pid, data.percent);
 });
 
-ipcMain.on("mixer-set-user-volume", (_event, data) => {
+function sendVolumeToDiscord(channel, data) {
   if (!discordView || !data || !data.userId) return;
-  discordView.webContents.send("discord-set-user-volume", {
+  discordView.webContents.send(channel, {
     userId: String(data.userId),
     percent: data.percent,
   });
+}
+
+ipcMain.on("mixer-set-user-volume", (_event, data) => {
+  sendVolumeToDiscord("discord-set-user-volume", data);
+});
+
+ipcMain.on("mixer-set-user-volume-live", (_event, data) => {
+  sendVolumeToDiscord("discord-set-user-volume-live", data);
+});
+
+ipcMain.on("mixer-set-user-volume-end", (_event, data) => {
+  sendVolumeToDiscord("discord-set-user-volume-end", data);
 });
 
 ipcMain.on("mixer-users-update", (event, users) => {
@@ -964,38 +976,35 @@ function setupScreenCapture() {
     );
   });
 
-  // Wspoldzielenie ekranu: zwroc zrodlo glownego ekranu (systemowy picker
-  // bywal konfliktowy i strumien w ogole sie nie startowal).
+  // Wspoldzielenie ekranu. Uzywamy NATYWNEGO okna wyboru Windows
+  // (useSystemPicker), dzieki czemu uzytkownik wybiera ekran/okno.
+  // useSystemPicker: gdy dostepny, Windows sam pokazuje okno wyboru ekranu/okna
+  // i NIE woluje naszego handlera. Handler jest wolany tylko jako fallback.
   try {
-    ses.setDisplayMediaRequestHandler((_request, callback) => {
-      console.log("[screenshare] getDisplayMedia requested");
-      desktopCapturer
-        .getSources({
-          types: ["screen"],
-          thumbnailSize: { width: 0, height: 0 },
-        })
-        .then((sources) => {
-          console.log(
-            "[screenshare] sources:",
-            sources.map((s) => `${s.name} (${s.id})`).join(", ") || "BRAK"
-          );
-          const screen = sources[0];
-          if (screen) {
-            callback({ video: screen });
-            console.log("[screenshare] udostepniam ekran:", screen.name);
-          } else {
-            callback({});
-            console.log("[screenshare] brak zrodel ekranu");
-          }
-        })
-        .catch((err) => {
-          console.error("[screenshare] blad desktopCapturer:", err);
-          callback({});
-        });
-    });
-    console.log("[screenshare] display-media handler zarejestrowany");
+    ses.setDisplayMediaRequestHandler(
+      (_request, callback) => {
+        console.log("[screenshare] fallback (brak pickera) - pierwszy ekran");
+        desktopCapturer
+          .getSources({
+            types: ["screen", "window"],
+            thumbnailSize: { width: 0, height: 0 },
+          })
+          .then((sources) => {
+            callback({
+              video: sources[0] || null,
+              audio: "loopback",
+            });
+          })
+          .catch((err) => {
+            console.error("[screenshare] blad:", err);
+            callback({ video: null, audio: undefined });
+          });
+      },
+      { useSystemPicker: true }
+    );
+    console.log("[screenshare] handler zarejestrowany (system picker wlaczony)");
   } catch (e) {
-    console.error("[screenshare] setDisplayMediaRequestHandler error:", e);
+    console.error("[screenshare] blad rejestracji handlera:", e);
   }
 }
 

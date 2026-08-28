@@ -23,6 +23,14 @@ contextBridge.exposeInMainWorld("electronMixer", {
     ipcRenderer.send("mixer-set-user-volume", { userId, percent });
   },
 
+  setUserVolumeLive: (userId, percent) => {
+    ipcRenderer.send("mixer-set-user-volume-live", { userId, percent });
+  },
+
+  setUserVolumeEnd: (userId, percent) => {
+    ipcRenderer.send("mixer-set-user-volume-end", { userId, percent });
+  },
+
   onApps: (cb) => {
     const handler = (_e, apps) => cb(apps);
     ipcRenderer.on("mixer-apps", handler);

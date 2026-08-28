@@ -447,77 +447,106 @@
     } catch (e) {}
   }
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // ===== NA ZYWO: maszyna stanu przeciagania =====
+  // Wartosc suwaka naszego i natywnego jest w tej samej skali (0..100,
+  // 100 = domyslna). Otwieramy menu raz, korektujemy strzalkami na zywo,
+  // zamykamy po puszczeniu.
+  const live = {
+    userId: null,
+    target: 100,
+    state: "idle", // idle | opening | open | closing
+    slider: null,
+    timer: null,
+  };
 
-  // Ustawia wartosc natywnego suwaka Discorda ZDARZENIAMI KLAWIATURY.
-  // Kluczowe: klawisze wysylane z malymi odstepami czasu, bo synchroniczna
-  // seria byla "sklejana" przez Reacta i commitowal sie tylko ulamek krokow.
-  // Home = 0%, PageUp = +10, ArrowRight = +1 (wewnetrzna skala Discorda).
-  async function setSliderByKeyboard(slider, percent) {
-    const p = Math.max(0, Math.min(100, Math.round(percent)));
-    try {
+  function getVolumeSlider() {
+    return document.querySelector("#user-context-user-volume [role='slider']");
+  }
+
+  function sliderValue(slider) {
+    const v = parseFloat(slider && slider.getAttribute("aria-valuenow"));
+    return isFinite(v) ? v : 100;
+  }
+
+  function startLiveVolume(userId, percent) {
+    const id = String(userId);
+    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    live.userId = id;
+    live.target = p;
+    live.slider = null;
+    if (live.timer) {
+      clearInterval(live.timer);
+      live.timer = null;
+    }
+
+    if (live.state === "idle" || live.state === "closing") {
+      const row = findVoiceRow(id);
+      if (!row) {
+        dbg("live: brak wiersza osoby " + id);
+        return;
+      }
+      row.scrollIntoView && row.scrollIntoView({ block: "center" });
+      live.state = "opening";
+      openContextMenu(row);
+    } else if (live.state === "closing") {
+      live.state = "opening";
+    }
+
+    live.timer = setInterval(() => {
+      const slider = getVolumeSlider();
+      if (!slider) return;
+
+      live.slider = slider;
+      live.state = "open";
       try {
         slider.focus();
       } catch (e) {}
-      await sleep(40);
-      fireKey(slider, "Home", "Home", 36);
-      await sleep(40);
 
-      const tens = Math.floor(p / 10);
-      const rest = p % 10;
-      for (let i = 0; i < tens; i++) {
-        fireKey(slider, "PageUp", "PageUp", 33);
-        await sleep(28);
+      // korekcja wzgledem biezacej pozycji
+      const cur = sliderValue(slider);
+      const diff = live.target - cur;
+      if (Math.abs(diff) < 0.6) return;
+
+      // liczba krokow: przynajmniej 1 (plynny podglad na zywo),
+      // max 12 na tick by szybko dogonic cel
+      let steps = Math.max(1, Math.min(12, Math.round(Math.abs(diff))));
+      while (steps-- > 0) {
+        if (diff > 0) fireKey(slider, "ArrowRight", "ArrowRight", 39);
+        else fireKey(slider, "ArrowLeft", "ArrowLeft", 37);
       }
-      for (let i = 0; i < rest; i++) {
-        fireKey(slider, "ArrowRight", "ArrowRight", 39);
-        await sleep(28);
-      }
-      await sleep(40);
-    } catch (e) {
-      dbg("setSliderByKeyboard blad: " + e.message);
-    }
+      // pamietana wartosc na liscie
+      userVolumes[live.userId] = live.target / 100;
+    }, 40);
   }
 
-  async function dragSlider(slider, fraction) {
-    await setSliderByKeyboard(slider, Math.round(fraction * 100));
-  }
-
-  function setUserVolume(userId, percent) {
+  function endLiveVolume(userId, percent) {
     const id = String(userId);
-    const p = Math.max(0, Math.min(100, Number(percent) || 0));
-    try {
-      const row = findVoiceRow(id);
-      if (!row) {
-        dbg("setVolume: brak wiersza osoby " + id);
-        return false;
-      }
-      row.scrollIntoView && row.scrollIntoView({ block: "center" });
-      openContextMenu(row);
-
-      let tries = 0;
-      const timer = setInterval(async () => {
-        tries++;
-        const slider = document.querySelector("#user-context-user-volume [role='slider']");
-        if (slider) {
-          clearInterval(timer);
-          // nasz suwak 0..100 ustawiamy klawiszami; Discord sam trzyma swoja skale
-          await dragSlider(slider, p / 100);
-          userVolumes[id] = p / 100;
-          const after = parseFloat(slider.getAttribute("aria-valuenow"));
-          dbg("setVolume " + id + " -> " + p + "% (aria=" + after + ")");
-          closeContextMenu();
-        } else if (tries > 25) {
-          clearInterval(timer);
-          dbg("setVolume: nie pojawil sie suwak w menu");
-          closeContextMenu();
-        }
-      }, 80);
-      return true;
-    } catch (e) {
-      dbg("setUserVolume DOM blad: " + e.message);
-      return false;
+    if (percent != null) {
+      live.target = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
     }
+    // chwile koryguj, potem zamknij
+    setTimeout(() => {
+      if (live.timer) {
+        clearInterval(live.timer);
+        live.timer = null;
+      }
+      userVolumes[id] = live.target / 100;
+      const v = live.slider ? sliderValue(live.slider) : null;
+      dbg("live end " + id + " -> " + live.target + "% (aria=" + v + ")");
+      closeContextMenu();
+      live.state = "closing";
+      setTimeout(() => {
+        live.state = "idle";
+        live.slider = null;
+        live.userId = null;
+      }, 200);
+    }, 250);
+  }
+
+  // Zgodnosc: jednorazowe ustawienie = live start+end
+  function setUserVolume(userId, percent) {
+    startLiveVolume(userId, percent);
+    endLiveVolume(userId, percent);
   }
 
   // ===== FALLBACK DOM =====
@@ -1065,9 +1094,20 @@
   }
 
   bridge.onSetUserVolume((userId, percent) => {
-    dbg("zadanie glosnosci " + userId + " = " + percent);
     setUserVolume(userId, percent);
   });
+
+  if (bridge.onSetUserVolumeLive) {
+    bridge.onSetUserVolumeLive((userId, percent) => {
+      startLiveVolume(userId, percent);
+    });
+  }
+
+  if (bridge.onSetUserVolumeEnd) {
+    bridge.onSetUserVolumeEnd((userId, percent) => {
+      endLiveVolume(userId, percent);
+    });
+  }
 
   function init() {
     webpackRequire = findWebpack();

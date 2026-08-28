@@ -19,6 +19,28 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     return () => ipcRenderer.removeListener("discord-set-user-volume", handler);
   },
 
+  // zmiana glosnosci w trakcie przeciagania (na zywo)
+  onSetUserVolumeLive: (cb) => {
+    const handler = (_e, data) => {
+      try {
+        cb(data.userId, data.percent);
+      } catch (e) {}
+    };
+    ipcRenderer.on("discord-set-user-volume-live", handler);
+    return () => ipcRenderer.removeListener("discord-set-user-volume-live", handler);
+  },
+
+  // koniec przeciagania
+  onSetUserVolumeEnd: (cb) => {
+    const handler = (_e, data) => {
+      try {
+        cb(data.userId, data.percent);
+      } catch (e) {}
+    };
+    ipcRenderer.on("discord-set-user-volume-end", handler);
+    return () => ipcRenderer.removeListener("discord-set-user-volume-end", handler);
+  },
+
   debug: (msg) => {
     try {
       ipcRenderer.send("mixer-debug", "[discord] " + String(msg));

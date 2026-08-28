@@ -66,7 +66,7 @@ function paintSlider(slider, percent, color) {
   if (color) slider.style.setProperty("--fill", color);
 }
 
-function makeRow({ icon, name, percent, sliderClass, onCommit }) {
+function makeRow({ icon, name, percent, sliderClass, onCommit, onInput }) {
   const row = document.createElement("div");
   row.className = "row";
 
@@ -107,6 +107,11 @@ function makeRow({ icon, name, percent, sliderClass, onCommit }) {
     const v = parseInt(slider.value, 10) || 0;
     paintSlider(slider, v);
     pctEl.textContent = v + "%";
+    if (onInput) {
+      try {
+        onInput(v, slider);
+      } catch (e) {}
+    }
   });
 
   slider.addEventListener("change", () => {
@@ -148,6 +153,9 @@ function renderApps(apps) {
         name: { text: desc.label },
         percent: Math.round(app.volume * 100),
         sliderClass: "",
+        onInput: (v) => {
+          window.electronMixer.setAppVolume(app.pid, v);
+        },
         onCommit: (v) => {
           window.electronMixer.setAppVolume(app.pid, v);
         },
@@ -203,8 +211,11 @@ function renderUsers(users) {
         },
         percent: Math.round((typeof u.volume === "number" ? u.volume : 1) * 100),
         sliderClass: "users",
+        onInput: (v) => {
+          window.electronMixer.setUserVolumeLive(u.id, v);
+        },
         onCommit: (v) => {
-          window.electronMixer.setUserVolume(u.id, v);
+          window.electronMixer.setUserVolumeEnd(u.id, v);
         },
       });
       bundle.row.querySelector(".icon").classList.add("dot");
