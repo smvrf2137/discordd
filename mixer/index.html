@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mikser głośności</title>
+  <link rel="stylesheet" href="mixer.css" />
+</head>
+<body>
+  <div class="window">
+    <div class="header">
+      <div class="header-title">
+        <span class="header-icon">🔊</span>
+        <span>VOLUME MIXER</span>
+      </div>
+      <button class="close" id="close-btn" title="Zamknij">×</button>
+    </div>
+
+    <div class="body">
+      <div class="hint" id="status-hint"></div>
+
+      <div class="section">
+        <div class="row title-row">
+          <span class="icon">🔊</span>
+          <span class="label">APLIKACJE</span>
+        </div>
+        <div id="apps-list" class="list">
+          <div class="empty">Brak aktywnych aplikacji audio…</div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="section">
+        <div class="row title-row">
+          <span class="icon">💬</span>
+          <span class="label">DISCORD — UŻYTKOWNICY</span>
+        </div>
+        <div id="users-list" class="list">
+          <div class="empty">Nie jesteś na kanale głosowym.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="mixer.js"></script>
+</body>
+</html>

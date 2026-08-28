@@ -8,7 +8,9 @@ const {
 } = require("electron");
 
 const path = require("path");
+const fs = require("fs");
 const RPC = require("discord-rpc");
+const { AudioControl } = require("./audio-control");
 
 nativeTheme.themeSource = "dark";
 
@@ -19,6 +21,16 @@ let overlayWindow;
 let soundcloudView;
 
 let overlayVisible = false;
+
+let mixerWindow = null;
+let mixerVisible = false;
+let audioControl = null;
+
+// JS wstrzykiwany do Discorda: uzytkownicy kanalu glosowego + ich glosnosc
+const MIXER_DISCORD_JS = fs.readFileSync(
+  path.join(__dirname, "mixer", "discord-mixer-injected.js"),
+  "utf8"
+);
 
 const TITLEBAR_HEIGHT = 38;
 const OVERLAY_HEADER_HEIGHT = 55;
@@ -536,6 +548,7 @@ function createMainWindow() {
 
   discordView = new BrowserView({
     webPreferences: {
+      preload: path.join(__dirname, "discord-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -545,10 +558,21 @@ function createMainWindow() {
   updateDiscordBounds();
   discordView.webContents.loadURL("https://discord.com/app");
 
+  discordView.webContents.on("did-finish-load", () => {
+    discordView.webContents.executeJavaScript(MIXER_DISCORD_JS).catch(() => {});
+  });
+
+  discordView.webContents.on("did-navigate-in-page", () => {
+    discordView.webContents.executeJavaScript(MIXER_DISCORD_JS).catch(() => {});
+  });
+
   // Przyklejenie overlay do Discorda
   mainWindow.on("move", () => {
     if (overlayVisible) {
       centerOverlay();
+    }
+    if (mixerVisible) {
+      centerMixer();
     }
   });
 
@@ -557,11 +581,17 @@ function createMainWindow() {
     if (overlayVisible) {
       centerOverlay();
     }
+    if (mixerVisible) {
+      centerMixer();
+    }
   });
 
   mainWindow.on("maximize", () => {
     if (overlayVisible) {
       centerOverlay();
+    }
+    if (mixerVisible) {
+      centerMixer();
     }
   });
 
@@ -569,11 +599,17 @@ function createMainWindow() {
     if (overlayVisible) {
       centerOverlay();
     }
+    if (mixerVisible) {
+      centerMixer();
+    }
   });
 
   mainWindow.on("minimize", () => {
     if (overlayWindow && overlayVisible) {
       overlayWindow.hide();
+    }
+    if (mixerWindow && mixerVisible) {
+      mixerWindow.hide();
     }
   });
 
@@ -582,11 +618,18 @@ function createMainWindow() {
       centerOverlay();
       overlayWindow.show();
     }
+    if (mixerWindow && mixerVisible) {
+      centerMixer();
+      mixerWindow.show();
+    }
   });
 
   mainWindow.on("closed", () => {
     if (overlayWindow) {
       overlayWindow.close();
+    }
+    if (mixerWindow) {
+      mixerWindow.close();
     }
     mainWindow = null;
   });
@@ -739,6 +782,89 @@ function toggleOverlay() {
   }
 }
 
+// ======== MIKSER GLOSNOSCI ========
+function createMixer() {
+  mixerWindow = new BrowserWindow({
+    width: 430,
+    height: 620,
+    minWidth: 360,
+    minHeight: 300,
+    frame: false,
+    resizable: true,
+    show: false,
+    parent: mainWindow,
+    modal: false,
+    skipTaskbar: true,
+    backgroundColor: "#1e1f22",
+    webPreferences: {
+      preload: path.join(__dirname, "mixer", "mixer-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  mixerWindow.loadFile(path.join(__dirname, "mixer", "index.html"));
+
+  mixerWindow.on("closed", () => {
+    mixerWindow = null;
+    mixerVisible = false;
+  });
+}
+
+function sendToMixer(channel, payload) {
+  if (mixerWindow && !mixerWindow.isDestroyed()) {
+    mixerWindow.webContents.send(channel, payload);
+  }
+}
+
+function centerMixer() {
+  if (!mainWindow || !mixerWindow) return;
+
+  const [mainX, mainY] = mainWindow.getPosition();
+  const [mainWidth, mainHeight] = mainWindow.getSize();
+  const [mixerWidth, mixerHeight] = mixerWindow.getSize();
+
+  const x = mainX + Math.floor((mainWidth - mixerWidth) / 2);
+  const y =
+    mainY +
+    TITLEBAR_HEIGHT +
+    Math.floor((mainHeight - TITLEBAR_HEIGHT - mixerHeight) / 2);
+
+  mixerWindow.setPosition(x, y);
+}
+
+function showMixer() {
+  if (!mixerWindow) {
+    createMixer();
+  }
+
+  mixerVisible = true;
+  centerMixer();
+  mixerWindow.show();
+  mixerWindow.focus();
+
+  // wyslanie swiezego stanu
+  if (audioControl && mixerWindow) {
+    mixerWindow.webContents.send("mixer-status", audioControl.getStatus());
+    mixerWindow.webContents.send("mixer-apps", audioControl.sessions);
+  }
+}
+
+function hideMixer() {
+  if (!mixerWindow) return;
+  mixerVisible = false;
+  mixerWindow.hide();
+  if (mainWindow) mainWindow.focus();
+}
+
+function toggleMixer() {
+  if (mixerVisible) {
+    hideMixer();
+  } else {
+    showMixer();
+  }
+}
+
 // IPC
 ipcMain.on("toggle-overlay", () => {
   toggleOverlay();
@@ -766,16 +892,73 @@ ipcMain.on("window-close", () => {
   if (mainWindow) mainWindow.close();
 });
 
+// IPC miksera
+ipcMain.on("toggle-mixer", () => {
+  toggleMixer();
+});
+
+ipcMain.on("close-mixer", () => {
+  hideMixer();
+});
+
+ipcMain.on("mixer-get-state", () => {
+  if (!mixerWindow) return;
+  mixerWindow.webContents.send(
+    "mixer-status",
+    audioControl ? audioControl.getStatus() : { ok: false, error: null }
+  );
+  mixerWindow.webContents.send("mixer-apps", audioControl ? audioControl.sessions : []);
+});
+
+ipcMain.on("mixer-debug", (_event, msg) => {
+  console.log("[mixer-debug]", msg);
+});
+
+ipcMain.on("mixer-set-app-volume", (_event, data) => {
+  if (!data || typeof data.pid !== "number") return;
+  if (audioControl) audioControl.setVolume(data.pid, data.percent);
+});
+
+ipcMain.on("mixer-set-user-volume", (_event, data) => {
+  if (!discordView || !data || !data.userId) return;
+  discordView.webContents.send("discord-set-user-volume", {
+    userId: String(data.userId),
+    percent: data.percent,
+  });
+});
+
+ipcMain.on("mixer-users-update", (event, users) => {
+  if (!discordView) return;
+  if (event.sender !== discordView.webContents) return;
+  if (mixerWindow && !mixerWindow.isDestroyed()) {
+    mixerWindow.webContents.send("mixer-users", users);
+  }
+});
+
 app.whenReady().then(() => {
   initDiscordRPC();
   createMainWindow();
   createOverlay();
 
-  
+  audioControl = new AudioControl();
+
+  audioControl.onUpdate((sessions) => {
+    sendToMixer("mixer-apps", sessions);
+  });
+
+  audioControl.onStatus((available) => {
+    sendToMixer("mixer-status", available);
+  });
 });
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
+
+  if (audioControl) {
+    try {
+      audioControl.stop();
+    } catch (e) {}
+  }
 
   if (rpc) {
     try {
@@ -789,4 +972,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
-});
+});
