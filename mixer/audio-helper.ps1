@@ -29,31 +29,31 @@ namespace MixerAudio {
   class MMDeviceEnumeratorComObject { }
 
   [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDeviceEnumerator {
+  public interface IMMDeviceEnumerator {
     [PreserveSig] int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
     [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
   }
 
   [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDevice {
+  public interface IMMDevice {
     [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
   }
 
   [Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioSessionManager2 {
+  public interface IAudioSessionManager2 {
     [PreserveSig] int GetAudioSessionControl(IntPtr id, int ctx, out IntPtr ctrl);
     [PreserveSig] int GetSimpleAudioVolume(IntPtr id, int ctx, out IntPtr vol);
     [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator enumr);
   }
 
   [Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioSessionEnumerator {
+  public interface IAudioSessionEnumerator {
     [PreserveSig] int GetCount(out int count);
     [PreserveSig] int GetSession(int idx, out IAudioSessionControl session);
   }
 
   [Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioSessionControl {
+  public interface IAudioSessionControl {
     [PreserveSig] int GetState(out int state);
     [PreserveSig] int GetIconPath(out IntPtr path);
     [PreserveSig] int GetDisplayName(out IntPtr name);
@@ -65,7 +65,7 @@ namespace MixerAudio {
   }
 
   [Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioSessionControl2 {
+  public interface IAudioSessionControl2 {
     [PreserveSig] int GetState(out int state);
     [PreserveSig] int GetIconPath(out IntPtr path);
     [PreserveSig] int GetDisplayName(out IntPtr name);
@@ -82,7 +82,7 @@ namespace MixerAudio {
   }
 
   [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface ISimpleAudioVolume {
+  public interface ISimpleAudioVolume {
     [PreserveSig] int SetMasterVolume(float level, Guid ctx);
     [PreserveSig] int GetMasterVolume(out float level);
     [PreserveSig] int SetMute(bool mute, Guid ctx);

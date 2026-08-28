@@ -9,8 +9,8 @@
   const bridge = window.electronMixerBridge;
   function dbg(msg) {
     try {
-      if (bridge && bridge.debug) bridge.debug(msg);
-      else console.log("[mixer]", msg);
+      if (bridge && bridge.debug) bridge.debug(String(msg));
+      else console.log("[mixer]", String(msg));
     } catch (e) {}
   }
 
@@ -21,37 +21,31 @@
 
   // Znalezione moduly
   let userStore = null;
-  let volumeModule = null; // { setUserVolume, getUserVolume? }
-  let voiceStateStore = null; // VoiceStateStore
+  let volumeModule = null;
+  let voiceStateStore = null;
   let speakingStore = null;
+  let channelStore = null;
 
   function findWebpack() {
     try {
-      const chunks =
-        window.webpackChunkdiscord_app ||
-        window.webpackChunk_DISCORD ||
-        (typeof window.webpackChunkdiscord_app !== "undefined"
-          ? window.webpackChunkdiscord_app
-          : null);
-
-      if (!chunks || !chunks.push) {
-        // sprobuj znalezc po wszystkich wlasciwosciach okna
-        for (const key of Object.keys(window)) {
-          if (
-            key.indexOf("webpackChunk") === 0 &&
-            window[key] &&
-            typeof window[key].push === "function"
-          ) {
-            return grabRequire(window[key]);
-          }
-        }
-        return null;
+      const names = ["webpackChunkdiscord_app", "webpackChunk_DISCORD"];
+      for (const n of names) {
+        const chunks = window[n];
+        if (chunks && typeof chunks.push === "function") return grabRequire(chunks);
       }
-      return grabRequire(chunks);
+      for (const key of Object.keys(window)) {
+        if (
+          key.indexOf("webpackChunk") === 0 &&
+          window[key] &&
+          typeof window[key].push === "function"
+        ) {
+          return grabRequire(window[key]);
+        }
+      }
     } catch (e) {
       dbg("findWebpack blad: " + e.message);
-      return null;
     }
+    return null;
   }
 
   function grabRequire(chunks) {
@@ -70,37 +64,79 @@
     return req;
   }
 
-  // Wywoluje fn(mod) dla kazdego modulu webpacka (rowniez moduly default / nested).
-  function eachModule(fn) {
-    if (!webpackRequire || !webpackRequire.c) return;
-    const cache = webpackRequire.c;
-    for (const key of Object.keys(cache)) {
-      let mod;
-      try {
-        mod = cache[key] && cache[key].exports;
-      } catch (e) {
-        continue;
+  function hasFn(obj, name) {
+    try {
+      return !!obj && typeof obj[name] === "function";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Z modulu webpacka wydobywa kandydatow: sam mod, mod.default oraz
+  // zagniezdzone obiekty o malych nazwach (minifikacja: exports.Z, exports.WP...).
+  function candidatesFromMod(mod, out, depth) {
+    if (!mod || depth > 2) return;
+    if (out.has(mod)) return;
+
+    let isCandidate = false;
+    try {
+      if (typeof mod === "object" || typeof mod === "function") {
+        isCandidate = true;
       }
-      if (!mod) continue;
+    } catch (e) {}
+    if (!isCandidate) return;
 
-      try {
-        fn(mod, key);
-      } catch (e) {}
+    out.add(mod);
 
-      // czesto modul jest opakowany w { default: ... }
-      if (mod.default && mod.default !== mod) {
+    let keys = [];
+    try {
+      keys = Object.keys(mod);
+    } catch (e) {
+      return;
+    }
+
+    for (const k of keys) {
+      // nie wchodzimy w zdarzenia/wewnetrzne pola React/Discorda
+      if (
+        k === "default" ||
+        /^[A-Za-z_$][A-Za-z0-9_$]{0,3}$/.test(k) ||
+        /Store|Action|api|Api/i.test(k)
+      ) {
+        let child;
         try {
-          fn(mod.default, key + ".default");
-        } catch (e) {}
+          child = mod[k];
+        } catch (e) {
+          continue;
+        }
+        if (child && (typeof child === "object" || typeof child === "function")) {
+          if (!out.has(child)) candidatesFromMod(child, out, depth + 1);
+        }
       }
     }
   }
 
-  function hasFn(obj, name) {
-    try {
-      return obj && typeof obj[name] === "function";
-    } catch (e) {
-      return false;
+  // Wywoluje fn(modul) dla wszystkich kandydatow
+  function eachCandidate(fn) {
+    if (!webpackRequire || !webpackRequire.c) return;
+    const cache = webpackRequire.c;
+    const seen = new Set();
+    for (const key of Object.keys(cache)) {
+      let exports;
+      try {
+        exports = cache[key] && cache[key].exports;
+      } catch (e) {
+        continue;
+      }
+      if (!exports) continue;
+      const cands = new Set();
+      candidatesFromMod(exports, cands, 0);
+      for (const c of cands) {
+        if (seen.has(c)) continue;
+        seen.add(c);
+        try {
+          fn(c);
+        } catch (e) {}
+      }
     }
   }
 
@@ -109,41 +145,44 @@
     let foundVolume = false;
     let foundVoice = false;
     let foundSpeaking = false;
+    let foundChannel = false;
 
-    eachModule((m) => {
-      if (!m || typeof m !== "object") return;
+    eachCandidate((m) => {
+      if (!m || (typeof m !== "object" && typeof m !== "function")) return;
 
-      // UserStore
       if (!foundUser && hasFn(m, "getCurrentUser") && hasFn(m, "getUser")) {
         userStore = m;
         foundUser = true;
       }
 
-      // Modul akcji glosnosci (setUserVolume)
       if (!foundVolume && hasFn(m, "setUserVolume")) {
         volumeModule = m;
         foundVolume = true;
       }
 
-      // VoiceStateStore
       if (!foundVoice && hasFn(m, "getVoiceStatesForChannel")) {
         voiceStateStore = m;
         foundVoice = true;
       }
 
-      // SpeakingStore
-      if (
-        !foundSpeaking &&
-        (hasFn(m, "isSpeaking") || hasFn(m, "getSpeakingStates"))
-      ) {
-        // upewnij sie, ze to sklep zwiazany z mowieniem
+      if (!foundChannel && hasFn(m, "getChannel") && hasFn(m, "getChannels")) {
+        channelStore = m;
+        foundChannel = true;
+      }
+
+      if (!foundSpeaking) {
         try {
-          const keys = Object.keys(m).filter(
-            (k) => typeof m[k] === "function" && /speak|voice/i.test(k)
-          );
-          if (keys.length) {
-            speakingStore = m;
-            foundSpeaking = true;
+          if (
+            hasFn(m, "isSpeaking") ||
+            (hasFn(m, "getSpeakingStates") && hasFn(m, "subscribe"))
+          ) {
+            const keys = Object.keys(m).filter(
+              (k) => typeof m[k] === "function" && /speak|voice/i.test(k)
+            );
+            if (keys.length) {
+              speakingStore = m;
+              foundSpeaking = true;
+            }
           }
         } catch (e) {}
       }
@@ -157,7 +196,9 @@
         " voice=" +
         foundVoice +
         " speaking=" +
-        foundSpeaking
+        foundSpeaking +
+        " channel=" +
+        foundChannel
     );
   }
 
@@ -194,15 +235,19 @@
 
   function getMyVoiceChannelId() {
     try {
+      const me = getCurrentUser();
+      const meId = me && me.id;
+
       if (voiceStateStore) {
         if (hasFn(voiceStateStore, "getVoiceChannelId")) {
           const id = voiceStateStore.getVoiceChannelId();
           if (id) return String(id);
         }
-        const me = getCurrentUser();
-        if (me && hasFn(voiceStateStore, "getVoiceStateForUser")) {
-          const st = voiceStateStore.getVoiceStateForUser(me.id);
-          if (st && st.channelId) return String(st.channelId);
+        if (meId && hasFn(voiceStateStore, "getVoiceStateForUser")) {
+          const st = voiceStateStore.getVoiceStateForUser(meId);
+          if (st && (st.channelId || st.channelID)) {
+            return String(st.channelId || st.channelID);
+          }
         }
       }
     } catch (e) {
@@ -223,15 +268,17 @@
         if (!states && hasFn(voiceStateStore, "getAllVoiceStates")) {
           try {
             const all = voiceStateStore.getAllVoiceStates();
-            states = all && all[channelId];
+            if (all) states = all[channelId];
           } catch (e) {}
         }
 
         if (states) {
           if (states instanceof Map) {
-            for (const [k, v] of states) out.set(String(k), v);
+            for (const [k, v] of states) if (v) out.set(String(k), v);
           } else if (typeof states.forEach === "function") {
-            states.forEach((v, k) => out.set(String(k), v));
+            states.forEach((v, k) => {
+              if (v) out.set(String(k), v);
+            });
           } else if (typeof states === "object") {
             for (const k of Object.keys(states)) {
               if (states[k]) out.set(String(k), states[k]);
@@ -245,19 +292,13 @@
     return out;
   }
 
-  // Glosnosc uzytkownika z modulu Discorda
-  let volumeScale = 100; // domyslnie 0..100 (aktualny Discord)
+  let volumeScale = 100; // aktualny Discord: 0..100
 
   function getUserVolumeRaw(userId) {
     try {
       if (volumeModule) {
-        if (hasFn(volumeModule, "getUserVolume")) {
-          return volumeModule.getUserVolume(userId);
-        }
-        // czesc wersji trzyma w getLocalVolume / akcji
-        if (hasFn(volumeModule, "getLocalVolume")) {
-          return volumeModule.getLocalVolume(userId);
-        }
+        if (hasFn(volumeModule, "getUserVolume")) return volumeModule.getUserVolume(userId);
+        if (hasFn(volumeModule, "getLocalVolume")) return volumeModule.getLocalVolume(userId);
       }
     } catch (e) {}
     return null;
@@ -273,16 +314,12 @@
   function isSpeakingNow(userId, channelId) {
     try {
       if (speakingStore) {
-        if (hasFn(speakingStore, "isSpeaking")) {
-          // rozne sygnatury: isSpeaking(userId) lub isSpeaking(channelId, userId)
-          try {
-            if (speakingStore.isSpeaking(userId)) return true;
-          } catch (e) {}
-          try {
-            if (channelId && speakingStore.isSpeaking(channelId, userId))
-              return true;
-          } catch (e) {}
-        }
+        try {
+          if (speakingStore.isSpeaking(userId)) return true;
+        } catch (e) {}
+        try {
+          if (channelId && speakingStore.isSpeaking(channelId, userId)) return true;
+        } catch (e) {}
       }
     } catch (e) {}
     return false;
@@ -305,107 +342,84 @@
   }
 
   // ===== FALLBACK DOM =====
-  // Zwraca elementy "wierszy" uzytkownikow na kanale glosowym.
-  function voiceRowElements() {
-    const rows = new Set();
-
-    // Najpewniejsze: elementy listy kanalu glosowego z data-list-item-id="voice-<kanal>_<user>"
+  function voiceDataItems() {
+    const items = [];
     try {
       document
         .querySelectorAll('[data-list-item-id^="voice-"]')
-        .forEach((el) => rows.add(el));
+        .forEach((el) => items.push(el));
     } catch (e) {}
-
-    const selectors = [
-      '[class*="voiceUser"]',
-      '[class*="voice-user"]',
-      'li[class*="voice"]',
-      '[class*="container_"][class*="voice"] [class*="avatar"]',
-    ];
-    for (const sel of selectors) {
-      try {
-        document.querySelectorAll(sel).forEach((el) => {
-          // wspinamy sie do najblizszego "kontenera uzytkownika"
-          let container = el;
-          const cls =
-            el.className && el.className.baseVal !== undefined
-              ? el.className.baseVal
-              : String(el.className || "");
-          if (/avatar/i.test(cls)) {
-            container =
-              el.closest(
-                '[data-list-item-id^="voice-"], li, [class*="voiceUser"], [class*="voice-user"], [class*="container"]'
-              ) || el.parentElement;
-          }
-          if (container) rows.add(container);
-        });
-      } catch (e) {}
-    }
-    return Array.from(rows);
+    return items;
   }
 
-  function userIdFromRow(row) {
-    // 0) atrybut data-list-item-id="voice-<channelId>_<userId>"
+  function userIdFromElement(el) {
+    // data-list-item-id="voice-<channelId>_<userId>"
     try {
-      const dli = row.getAttribute && row.getAttribute("data-list-item-id");
+      const dli = el.getAttribute && el.getAttribute("data-list-item-id");
       if (dli) {
-        let m = dli.match(/_(\d{6,})$/);
+        const m = dli.match(/voice-(\d+)_(\d{6,})/);
+        if (m) return m[2];
+        const m2 = dli.match(/_(\d{6,})$/);
+        if (m2) return m2[1];
+      }
+    } catch (e) {}
+
+    // szukaj w poddrzewie / najblizszym rodzicu
+    try {
+      const scope =
+        el.closest && el.closest('[data-list-item-id^="voice-"]')
+          ? el.closest('[data-list-item-id^="voice-"]')
+          : el;
+      const img = scope.querySelector ? scope.querySelector("img") : null;
+      if (img) {
+        const src = img.getAttribute("src") || "";
+        const m = src.match(/avatars\/(\d{6,})\//);
         if (m) return m[1];
       }
-      const dliParent = row.closest && row.closest('[data-list-item-id^="voice-"]');
-      if (dliParent) {
-        const dli2 = dliParent.getAttribute("data-list-item-id") || "";
-        let m = dli2.match(/_(\d{6,})$/);
+      const link = scope.querySelector
+        ? scope.querySelector('a[href*="/users/"]')
+        : null;
+      if (link) {
+        const m = (link.getAttribute("href") || "").match(/users\/(\d{6,})/);
         if (m) return m[1];
       }
     } catch (e) {}
 
-    // 1) avatar URL
-    const img = row.querySelector("img");
-    if (img) {
-      const src = img.getAttribute("src") || "";
-      let m = src.match(/avatars\/(\d{6,})\//);
-      if (m) return m[1];
-    }
-    // 2) link do profilu
-    const link = row.querySelector('a[href*="/users/"], a[href*="channels/@me"]');
-    if (link) {
-      const href = link.getAttribute("href") || "";
-      let m = href.match(/users\/(\d{6,})/);
-      if (m) return m[1];
-    }
-    // 3) klasa zawierajaca id
     const cls =
-      row.className && row.className.baseVal !== undefined
-        ? row.className.baseVal
-        : String(row.className || "");
-    let m = cls.match(/\b(\d{17,20})\b/);
-    if (m) return m[1];
+      el.className && el.className.baseVal !== undefined
+        ? el.className.baseVal
+        : String(el.className || "");
+    const m = cls.match(/\b(\d{17,20})\b/);
+    return m ? m[1] : null;
+  }
+
+  function nameFromElement(el) {
+    try {
+      const scope =
+        (el.closest && el.closest('[data-list-item-id^="voice-"]')) || el;
+      const nameEl =
+        scope.querySelector(
+          '[class*="username"], [class*="userName"], [class*="name_"]'
+        ) || scope.querySelector("span");
+      if (nameEl) {
+        const t = nameEl.textContent.trim();
+        if (t && t.length < 40) return t;
+      }
+    } catch (e) {}
     return null;
   }
 
-  function nameFromRow(row) {
-    const el =
-      row.querySelector('[class*="username"], [class*="userName"], [class*="name_"]') ||
-      row.querySelector("span");
-    if (el) {
-      const t = el.textContent.trim();
-      if (t && t.length < 40) return t;
-    }
-    return null;
-  }
-
-  function flagsFromRow(row) {
+  function flagsFromElement(el) {
     let speaking = false;
     let muted = false;
     try {
-      const html = row.outerHTML || "";
-      if (/speaking/i.test(html) && !/notSpeaking|not-speaking/i.test(html)) {
-        // mówienie zwykle ustawia ramkę/klase speaking
-        if (/\bspeaking\b|Speaking_/i.test(html)) speaking = true;
-      }
-      // wyciszenie mikrofonu: ikona mic-Muted / aria-label
-      const mic = row.querySelector('[class*="mic"], [aria-label*="uted"]');
+      const scope =
+        (el.closest && el.closest('[data-list-item-id^="voice-"]')) || el;
+      const html = scope.outerHTML || "";
+      if (/\bspeaking\b|Speaking_|borderSpeaking/i.test(html)) speaking = true;
+      const mic = scope.querySelector(
+        '[class*="mic"], [aria-label*="uted"], [class*="Muted"]'
+      );
       if (mic) {
         const label = mic.getAttribute("aria-label") || "";
         const mcls = String(
@@ -413,25 +427,54 @@
         );
         if (/muted/i.test(mcls) || /muted/i.test(label)) muted = true;
       }
-      if (/muted/i.test(html) && /mic|microphone|MutedMicrophone/i.test(html)) {
-        muted = true;
-      }
     } catch (e) {}
     return { speaking, muted };
+  }
+
+  let lastDomDbg = "";
+  function collectDomUsers(myId) {
+    const users = new Map();
+    const items = voiceDataItems();
+
+    // diagnostyka (tylko gdy sie zmienia)
+    const sample = items
+      .slice(0, 5)
+      .map((el) => el.getAttribute("data-list-item-id"))
+      .join(" || ");
+    const sig = items.length + "|" + sample;
+    if (sig !== lastDomDbg) {
+      lastDomDbg = sig;
+      dbg("DOM voice-* elementow: " + items.length + (sample ? " np. " + sample : ""));
+    }
+
+    for (const el of items) {
+      const id = userIdFromElement(el);
+      if (!id) continue;
+      if (myId && id === myId) continue;
+      const flags = flagsFromElement(el);
+      users.set(id, {
+        id,
+        name: userName(id) || nameFromElement(el) || "User " + id.slice(-4),
+        volume: normalizedVolume(id),
+        muted: flags.muted,
+        speaking: flags.speaking,
+      });
+    }
+    return users;
   }
 
   // ===== GLOWNA PENTLA =====
   let lastPayload = "";
   let tickCount = 0;
+  let scanAttempts = 0;
 
   function collectUsers() {
-    const users = new Map(); // id -> user obj
+    const users = new Map();
     const me = getCurrentUser();
     const myId = me && me.id ? String(me.id) : null;
-
     const channelId = getMyVoiceChannelId();
 
-    // 1) Ze sklepu stanow glosowych
+    // 1) ze sklepu stanow glosowych
     if (channelId) {
       const states = channelVoiceStates(channelId);
       for (const [id, st] of states) {
@@ -447,39 +490,15 @@
       }
     }
 
-    // 2) Z DOM (uzupelnienie / glosnosc + status)
-    try {
-      const rows = voiceRowElements();
-      if (rows.length) dbg("DOM: znaleziono wierszy " + rows.length);
-      for (const row of rows) {
-        const id = userIdFromRow(row);
-        if (!id) continue;
-        if (myId && id === myId) continue;
-
-        const flags = flagsFromRow(row);
-        const name = nameFromRow(row);
-
-        if (users.has(id)) {
-          const u = users.get(id);
-          if (name && !u.name.startsWith("User ")) {
-            // zachowaj nazwe ze sklepu
-          } else if (name) {
-            u.name = name;
-          }
-          u.muted = u.muted || flags.muted;
-          u.speaking = u.speaking || flags.speaking;
-        } else {
-          users.set(id, {
-            id,
-            name: userName(id) || name || "User " + id.slice(-4),
-            volume: normalizedVolume(id),
-            muted: flags.muted,
-            speaking: flags.speaking,
-          });
-        }
+    // 2) z DOM
+    const dom = collectDomUsers(myId);
+    for (const [id, u] of dom) {
+      if (!users.has(id)) users.set(id, u);
+      else {
+        const ex = users.get(id);
+        ex.muted = ex.muted || u.muted;
+        ex.speaking = ex.speaking || u.speaking;
       }
-    } catch (e) {
-      dbg("DOM fallback blad: " + e.message);
     }
 
     return Array.from(users.values());
@@ -493,8 +512,16 @@
           dbg("webpack znaleziony");
           scanModules();
         }
-      } else if (!volumeModule || !voiceStateStore || !userStore) {
-        scanModules();
+      } else if (
+        !userStore ||
+        !voiceStateStore ||
+        !volumeModule
+      ) {
+        // ponawiaj skan przez pierwsze ~30 s
+        if (scanAttempts < 15) {
+          scanAttempts++;
+          scanModules();
+        }
       }
 
       const users = collectUsers();
@@ -507,24 +534,23 @@
         } catch (e) {}
       }
 
-      // Heartbeat diagnostyczny co ~10s
       tickCount++;
       if (tickCount % 7 === 0) {
         dbg(
           "heartbeat: users=" +
             users.length +
             " webpack=" +
-            (!!webpackRequire) +
+            !!webpackRequire +
             " userStore=" +
-            (!!userStore) +
+            !!userStore +
             " voiceStore=" +
-            (!!voiceStateStore) +
+            !!voiceStateStore +
             " volumeModule=" +
-            (!!volumeModule) +
+            !!volumeModule +
             " channel=" +
             (getMyVoiceChannelId() || "brak") +
-            " domRows=" +
-            voiceRowElements().length
+            " domVoice=" +
+            voiceDataItems().length
         );
       }
     } catch (e) {
@@ -547,8 +573,9 @@
     }
     tick();
     setInterval(tick, 1500);
-    setTimeout(scanModules, 4000);
-    setTimeout(scanModules, 10000);
+    // dodatkowe skany pozniej (moduly laduja sie z opoznieniem)
+    setTimeout(scanModules, 5000);
+    setTimeout(scanModules, 12000);
   }
 
   if (document.readyState === "loading") {
