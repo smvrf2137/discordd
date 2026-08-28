@@ -424,37 +424,67 @@
     } catch (e) {}
   }
 
-  // Suwak Discorda: poziomy, uzywa aria-valuenow 0..200 (100=norm).
-  // Pozycja: left% = valuenow/2 (bo 200 -> 100% szerokosci).
-  function dragSlider(slider, fraction) {
+  // Ustawia wartosc natywnego suwaka Discorda symulujac przeciagniecie.
+  // Suwak (Radix) w pointerdown wola setPointerCapture - na sztucznym
+  // pointerzie to rzuca wyjatek i przerywa commit. Stubujemy capture/release.
+  function fireAt(el, type, Ctor, x, y, buttons) {
     try {
-      const rect = slider.getBoundingClientRect();
-      const cx = rect.left + Math.max(0, Math.min(1, fraction)) * rect.width;
-      const cy = rect.top + rect.height / 2;
-      const opt = {
+      const ev = new Ctor(type, {
         bubbles: true,
         cancelable: true,
         view: window,
-        clientX: cx,
-        clientY: cy,
+        clientX: x,
+        clientY: y,
         button: 0,
-        buttons: 1,
+        buttons: buttons,
         pointerId: 1,
         pointerType: "mouse",
         isPrimary: true,
-      };
-      const common = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0, buttons: 1 };
-      try { slider.dispatchEvent(new PointerEvent("pointerdown", { ...opt, buttons: 1 })); } catch (e) {}
-      try { slider.dispatchEvent(new MouseEvent("mousedown", common)); } catch (e) {}
-      // kilka move dla plynnosci
-      for (let i = 1; i <= 3; i++) {
-        const mx = rect.left + Math.max(0, Math.min(1, fraction)) * (rect.width * (0.7 + 0.1 * i));
-        try { slider.dispatchEvent(new PointerEvent("pointermove", { ...opt, clientX: cx, clientY: cy })); } catch (e) {}
-        void mx;
+      });
+      el.dispatchEvent(ev);
+    } catch (e) {}
+  }
+
+  function dragSlider(slider, fraction) {
+    try {
+      const f = Math.max(0, Math.min(1, fraction));
+      const rect = slider.getBoundingClientRect();
+      const x = rect.left + f * rect.width;
+      const y = rect.top + rect.height / 2;
+
+      // elementy "grywalne": uchwyt, wypelnienie lub sam suwak
+      const targets = [
+        slider,
+        slider.querySelector(".grabber_a562c8, [class*='grabber']"),
+        slider.querySelector(".barFill_a562c8, [class*='barFill']"),
+        slider.querySelector(".bar_a562c8, [class*='bar']"),
+      ].filter(Boolean);
+      const target = targets[0];
+
+      // zaslepianie setPointerCapture na czas gestu (Radix tego uzywa)
+      const origSet = Element.prototype.setPointerCapture;
+      const origRel = Element.prototype.releasePointerCapture;
+      Element.prototype.setPointerCapture = function () {};
+      Element.prototype.releasePointerCapture = function () {};
+
+      try {
+        fireAt(target, "pointerdown", PointerEvent, x, y, 1);
+        fireAt(target, "mousedown", MouseEvent, x, y, 1);
+        // kilka move (od biezacej pozycji do celu) dla pewnosci
+        for (let i = 1; i <= 4; i++) {
+          const xi = rect.left + Math.max(0, Math.min(1, f * (0.6 + 0.1 * i))) * rect.width;
+          fireAt(target, "pointermove", PointerEvent, xi, y, 1);
+          fireAt(target, "mousemove", MouseEvent, xi, y, 1);
+        }
+        fireAt(target, "pointermove", PointerEvent, x, y, 1);
+        fireAt(target, "mousemove", MouseEvent, x, y, 1);
+        fireAt(target, "pointerup", PointerEvent, x, y, 0);
+        fireAt(target, "mouseup", MouseEvent, x, y, 0);
+        fireAt(target, "click", MouseEvent, x, y, 0);
+      } finally {
+        Element.prototype.setPointerCapture = origSet;
+        Element.prototype.releasePointerCapture = origRel;
       }
-      try { slider.dispatchEvent(new PointerEvent("pointerup", opt)); } catch (e) {}
-      try { slider.dispatchEvent(new MouseEvent("mouseup", common)); } catch (e) {}
-      try { slider.dispatchEvent(new MouseEvent("click", common)); } catch (e) {}
     } catch (e) {
       dbg("dragSlider blad: " + e.message);
     }

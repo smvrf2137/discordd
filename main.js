@@ -5,6 +5,8 @@ const {
   globalShortcut,
   ipcMain,
   nativeTheme,
+  session,
+  desktopCapturer,
 } = require("electron");
 
 const path = require("path");
@@ -937,8 +939,58 @@ ipcMain.on("mixer-users-update", (event, users) => {
   }
 });
 
+function setupScreenCapture() {
+  const ses = session.defaultSession;
+
+  // Zezwol na media (mikrofon/kamere) i przechwytywanie ekranu w Discordsie
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (
+      ["media", "audioCapture", "videoCapture", "display-capture"].includes(
+        permission
+      )
+    ) {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    return ["media", "audioCapture", "videoCapture", "display-capture"].includes(
+      permission
+    );
+  });
+
+  // Wspoldzielenie ekranu. Najpierw systemowy picker (okno wyboru ekranu/okna),
+  // w razie braku wsparcia fallback wybierajacy pierwszy ekran.
+  const handleRequest = (callback) => {
+    desktopCapturer
+      .getSources({
+        types: ["screen", "window"],
+        thumbnailSize: { width: 0, height: 0 },
+      })
+      .then((sources) => callback({ video: sources[0] || null, audio: undefined }))
+      .catch(() => callback({ video: null, audio: undefined }));
+  };
+
+  try {
+    ses.setDisplayMediaRequestHandler(
+      (_request, callback) => handleRequest(callback),
+      { useSystemPicker: true }
+    );
+  } catch (e) {
+    try {
+      ses.setDisplayMediaRequestHandler((_request, callback) =>
+        handleRequest(callback)
+      );
+    } catch (e2) {
+      console.error("setDisplayMediaRequestHandler error:", e2);
+    }
+  }
+}
+
 app.whenReady().then(() => {
   initDiscordRPC();
+  setupScreenCapture();
   createMainWindow();
   createOverlay();
 
