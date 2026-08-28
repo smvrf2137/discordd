@@ -97,7 +97,7 @@ namespace MixerAudio {
     [PreserveSig] int GetMute(out bool mute);
   }
 
-  public delegate void SessionVisitor(uint pid, string procName, ISimpleAudioVolume vol);
+  public delegate void SessionVisitor(uint pid, string procName, ISimpleAudioVolume vol, int state);
 
   public static class Core {
     static string Esc(string s) {
@@ -181,7 +181,9 @@ namespace MixerAudio {
             try { if (sc2.IsSystemSoundsSession() == 0) continue; } catch { }
             ISimpleAudioVolume vol = sc2 as ISimpleAudioVolume;
             if (vol == null) continue;
-            v(pid, ProcName(pid), vol);
+            int st = -1;
+            try { sc2.GetState(out st); } catch { }
+            v(pid, ProcName(pid), vol, st);
           } finally {
             if (sc != null) Marshal.ReleaseComObject(sc);
           }
@@ -216,7 +218,10 @@ namespace MixerAudio {
       bool first = true;
       HashSet<uint> seen = new HashSet<uint>();
       try {
-        VisitSessions(delegate(uint pid, string procName, ISimpleAudioVolume vol) {
+        VisitSessions(delegate(uint pid, string procName, ISimpleAudioVolume vol, int st) {
+          // stan sesji: 0 = Inactive (brak strumienia dzwieku), 1 = Active, 2 = Expired.
+          // Pomin nieaktywne - bez dzwieku suwak i tak nic nie zmienia.
+          if (st == 0 || st == 2) return;
           if (seen.Contains(pid)) return;
           seen.Add(pid);
           float level = 1f;
@@ -230,6 +235,7 @@ namespace MixerAudio {
           sb.Append(",\"name\":\"").Append(Esc(name)).Append("\"");
           sb.Append(",\"vol\":").Append(level.ToString(CultureInfo.InvariantCulture));
           sb.Append(",\"muted\":").Append(muted ? "true" : "false");
+          sb.Append(",\"state\":").Append(st.ToString(CultureInfo.InvariantCulture));
           sb.Append(",\"self\":").Append(self.Contains(pid) ? "true" : "false");
           sb.Append("}");
         });
@@ -242,7 +248,7 @@ namespace MixerAudio {
       Guid ctx = Guid.Empty;
       bool set = false;
       try {
-        VisitSessions(delegate(uint pid, string procName, ISimpleAudioVolume vol) {
+        VisitSessions(delegate(uint pid, string procName, ISimpleAudioVolume vol, int st) {
           if (pid == targetPid) {
             try { if (vol.SetMasterVolume(level, ctx) == 0) set = true; } catch { }
           }

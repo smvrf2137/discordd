@@ -134,6 +134,18 @@ body {
   flex-shrink: 0;
 }
 
+.row .icon.icon-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.row .icon.icon-img svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
 .row .app-name,
 .row .user-name {
   width: 110px;

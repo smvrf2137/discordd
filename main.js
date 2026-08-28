@@ -823,6 +823,33 @@ function sendToMixer(channel, payload) {
   }
 }
 
+// Renderery naszej aplikacji (Discord / overlay / SoundCloud) maja taka sama
+// nazwe procesu, wiec helper audio widzi je wszystkie jako "Discord"/exe.
+// Tu przypinamy etykiety po znanych PID-ach rendererow.
+function tagSessions(sessions) {
+  let scPid = null;
+  try {
+    if (soundcloudView && !soundcloudView.isDestroyed()) {
+      scPid = soundcloudView.webContents.getOSProcessId();
+    }
+  } catch (e) {
+    scPid = null;
+  }
+
+  return sessions.map((s) => {
+    if (!s) return s;
+    if (scPid && s.pid === scPid) {
+      return { ...s, tag: "soundcloud" };
+    }
+    return s;
+  });
+}
+
+function sendAppsToMixer() {
+  if (!audioControl) return;
+  sendToMixer("mixer-apps", tagSessions(audioControl.sessions));
+}
+
 function centerMixer() {
   if (!mainWindow || !mixerWindow) return;
 
@@ -852,7 +879,7 @@ function showMixer() {
   // wyslanie swiezego stanu
   if (audioControl && mixerWindow) {
     mixerWindow.webContents.send("mixer-status", audioControl.getStatus());
-    mixerWindow.webContents.send("mixer-apps", audioControl.sessions);
+    sendAppsToMixer();
   }
 }
 
@@ -913,7 +940,8 @@ ipcMain.on("mixer-get-state", () => {
     "mixer-status",
     audioControl ? audioControl.getStatus() : { ok: false, error: null }
   );
-  mixerWindow.webContents.send("mixer-apps", audioControl ? audioControl.sessions : []);
+  if (audioControl) sendAppsToMixer();
+  else mixerWindow.webContents.send("mixer-apps", []);
 });
 
 ipcMain.on("mixer-debug", (_event, msg) => {
@@ -1016,8 +1044,8 @@ app.whenReady().then(() => {
 
   audioControl = new AudioControl();
 
-  audioControl.onUpdate((sessions) => {
-    sendToMixer("mixer-apps", sessions);
+  audioControl.onUpdate(() => {
+    sendAppsToMixer();
   });
 
   audioControl.onStatus((available) => {
@@ -1027,6 +1055,11 @@ app.whenReady().then(() => {
   audioControl.onLog((line) => {
     sendToMixer("mixer-log", "[audio] " + line);
   });
+
+  // PID renderera SoundCloud moze byc znany dopiero po starcie widoku -
+  // przepnij tagi po kilku sekundach i potem co 15s.
+  setTimeout(sendAppsToMixer, 4000);
+  setInterval(sendAppsToMixer, 15000);
 });
 
 app.on("will-quit", () => {
@@ -1050,4 +1083,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
-});
+});

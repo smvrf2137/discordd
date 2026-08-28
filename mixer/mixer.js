@@ -9,6 +9,7 @@ closeBtn.addEventListener("click", () => {
 
 // Rozpoznawanie znanych aplikacji po nazwie procesu
 const APP_PRESETS = [
+  { match: ["nvcontainer"], icon: "🔊", label: "NVIDIA Container" },
   { match: ["discord", "my-discord-client", "electron"], icon: "💬", label: "Discord" },
   { match: ["rust"], icon: "🎮", label: "Rust" },
   { match: ["spotify"], icon: "🎵", label: "Spotify" },
@@ -53,8 +54,15 @@ function prettyName(name) {
 }
 
 function describeApp(app) {
+  // renderer SoundCloda osadzony w naszym kliencie (tagowany po PID w main.js)
+  if (app.tag === "soundcloud") {
+    return {
+      icon: "img:sc",
+      label: "SoundCloud",
+    };
+  }
   if (app.self) {
-    return { icon: "💬", label: "Discord" };
+    return { icon: "💬", label: "Discord (nasz klient)" };
   }
   const p = presetFor(app.name);
   if (p) return { icon: p.icon, label: p.label };
@@ -66,13 +74,24 @@ function paintSlider(slider, percent, color) {
   if (color) slider.style.setProperty("--fill", color);
 }
 
+// Ikony wbudowane (SVG inline, nie wymagaja plikow)
+const ICON_IMAGES = {
+  sc: '<svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="5" fill="#ff5500"/><path fill="#fff" d="M3.6 14.9v3.1h.9v-3.1h-.9zm1.9-1.1v4.2h.9V13.8h-.9zm1.9-.7v4.9h.9v-4.9h-.9zm1.9-.4v5.3h.9v-5.3h-.9zm1.9.6v4.7h.9v-4.7h-.9zm2.3-2.5c-.2 0-.4 0-.6.1v4.9h6.6c1.5 0 2.7-1 2.7-2.5 0-1.3-1-2.4-2.3-2.5-.4-1.6-1.9-2.8-3.7-2.8-1.2 0-2.2.5-2.9 1.3.1 0 .2 0 .2.1.1.1.2.2.2.4v2.3c-.4-.2-.7-.3-1.2-.3z"/></svg>',
+};
+
 function makeRow({ icon, name, percent, sliderClass, onCommit, onInput }) {
   const row = document.createElement("div");
   row.className = "row";
 
   const iconEl = document.createElement("span");
   iconEl.className = "icon";
-  iconEl.textContent = icon;
+  if (typeof icon === "string" && icon.startsWith("img:")) {
+    const key = icon.slice(4);
+    iconEl.innerHTML = ICON_IMAGES[key] || "";
+    iconEl.classList.add("icon-img");
+  } else {
+    iconEl.textContent = icon;
+  }
   if (!icon) iconEl.style.display = "none";
 
   const nameEl = document.createElement("span");
