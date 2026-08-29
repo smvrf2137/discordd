@@ -27,6 +27,16 @@ let soundcloudVolume = null;
 
 let overlayVisible = false;
 
+// ======== LIVE TWITCH ========
+// Kanal znajomego, ktorego live automatycznie otwieramy.
+const TWITCH_CHANNEL = "vanqubix";
+let twitchWindow = null;
+let twitchView = null;
+let twitchVisible = false;
+let twitchLoaded = false; // player juz zaladowany
+let twitchLive = null; // null=nieznany stan, true/false z odpytywania
+let twitchUserClosed = false; // uzytkownik recznie zamknal okno
+
 let mixerWindow = null;
 let mixerVisible = false;
 let audioControl = null;
@@ -580,6 +590,9 @@ function createMainWindow() {
     if (overlayVisible) {
       centerOverlay();
     }
+    if (twitchVisible) {
+      centerTwitch();
+    }
     if (mixerVisible) {
       centerMixer();
     }
@@ -591,6 +604,9 @@ function createMainWindow() {
     if (overlayVisible) {
       centerOverlay();
     }
+    if (twitchVisible) {
+      centerTwitch();
+    }
     if (mixerVisible) {
       centerMixer();
     }
@@ -600,6 +616,9 @@ function createMainWindow() {
   mainWindow.on("maximize", () => {
     if (overlayVisible) {
       centerOverlay();
+    }
+    if (twitchVisible) {
+      centerTwitch();
     }
     if (mixerVisible) {
       centerMixer();
@@ -611,6 +630,9 @@ function createMainWindow() {
     if (overlayVisible) {
       centerOverlay();
     }
+    if (twitchVisible) {
+      centerTwitch();
+    }
     if (mixerVisible) {
       centerMixer();
     }
@@ -620,6 +642,9 @@ function createMainWindow() {
   mainWindow.on("minimize", () => {
     if (overlayWindow && overlayVisible) {
       overlayWindow.hide();
+    }
+    if (twitchWindow && twitchVisible) {
+      twitchWindow.hide();
     }
     if (mixerWindow && mixerVisible) {
       mixerWindow.hide();
@@ -632,6 +657,10 @@ function createMainWindow() {
       centerOverlay();
       overlayWindow.show();
     }
+    if (twitchWindow && twitchVisible) {
+      centerTwitch();
+      twitchWindow.show();
+    }
     if (mixerWindow && mixerVisible) {
       centerMixer();
       mixerWindow.show();
@@ -642,6 +671,9 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     if (overlayWindow) {
       overlayWindow.close();
+    }
+    if (twitchWindow) {
+      twitchWindow.close();
     }
     if (mixerWindow) {
       mixerWindow.close();
@@ -871,6 +903,238 @@ function toggleOverlay() {
   }
 }
 
+// ======== LIVE TWITCH ========
+const TWITCH_HEADER_HEIGHT = 55;
+
+function twitchPlayerUrl() {
+  // Popout player (dziala tez jako samodzielna strona). parent=twitch.tv
+  // pasuje do tego URL-a. Glosnosc startowa 1.0 (suwakiem SoundCloud-klon?
+  // na razie player ma swoj suwak).
+  const params = new URLSearchParams({
+    channel: TWITCH_CHANNEL,
+    enableExtensions: "true",
+    muted: "false",
+    parent: "twitch.tv",
+    player: "popout",
+    volume: "0.9",
+  });
+  return "https://player.twitch.tv/?" + params.toString();
+}
+
+function centerTwitch() {
+  if (!mainWindow || !twitchWindow) return;
+  const [mainX, mainY] = mainWindow.getPosition();
+  const [mainWidth, mainHeight] = mainWindow.getSize();
+  const [w, h] = twitchWindow.getSize();
+  const x = mainX + Math.floor((mainWidth - w) / 2);
+  const y =
+    mainY +
+    TITLEBAR_HEIGHT +
+    Math.floor((mainHeight - TITLEBAR_HEIGHT - h) / 2);
+  twitchWindow.setPosition(x, y);
+}
+
+function updateTwitchBounds() {
+  if (!twitchWindow || !twitchView) return;
+  const [width, height] = twitchWindow.getContentSize();
+  twitchView.setBounds({
+    x: 0,
+    y: TWITCH_HEADER_HEIGHT,
+    width: width,
+    height: Math.max(1, height - TWITCH_HEADER_HEIGHT),
+  });
+}
+
+function setTwitchLiveIndicator(live) {
+  try {
+    if (twitchWindow && !twitchWindow.isDestroyed()) {
+      twitchWindow.webContents.send("twitch-live", !!live);
+    }
+  } catch (e) {}
+}
+
+function createTwitchPlayerView() {
+  if (twitchView) return twitchView;
+  twitchView = new BrowserView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  twitchWindow.addBrowserView(twitchView);
+  updateTwitchBounds();
+
+  const wc = twitchView.webContents;
+  wc.setUserAgent(USER_AGENT);
+  wc.loadURL(twitchPlayerUrl());
+  twitchLoaded = true;
+
+  wc.on("did-finish-load", () => {
+    // przyciemnij tla playera, by pasowalo do ciemnego okna
+    wc.insertCSS("html,body{background:#0e0e10 !important;}").catch(() => {});
+  });
+
+  // Gdy popout nie zaladuje sie poprawnie, sprobuj pelnej strony kanalu.
+  wc.on("did-fail-load", (_e, errorCode, errorDesc, validatedURL) => {
+    if (errorCode === -3) return; // przerwane (np. przy przejsciu na inny URL)
+    try {
+      const url = String(validatedURL || "");
+      if (url.indexOf("player.twitch.tv") !== -1) {
+        wc.loadURL("https://www.twitch.tv/" + TWITCH_CHANNEL);
+      }
+    } catch (e) {}
+  });
+
+  return twitchView;
+}
+
+function createTwitchWindow() {
+  if (twitchWindow) return;
+  twitchWindow = new BrowserWindow({
+    width: 1280,
+    height: 780,
+    minWidth: 800,
+    minHeight: 480,
+    frame: false,
+    transparent: false,
+    resizable: true,
+    show: false,
+    parent: mainWindow,
+    modal: false,
+    skipTaskbar: true,
+    backgroundColor: "#0e0e10",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  twitchWindow.loadFile(path.join(__dirname, "twitch", "index.html"));
+
+  twitchWindow.on("resize", () => {
+    updateTwitchBounds();
+  });
+
+  twitchWindow.on("closed", () => {
+    twitchWindow = null;
+    twitchView = null;
+    twitchLoaded = false;
+    twitchVisible = false;
+  });
+
+  // player tworzymy dopiero przy pierwszym pokazaniu (oszczednosc zasobow)
+}
+
+function showTwitch(autoOpened) {
+  if (!twitchWindow) createTwitchWindow();
+  twitchVisible = true;
+  if (autoOpened) twitchUserClosed = false;
+  // zaladuj player (lub przeladuj, by zlapac poczatek streama)
+  if (!twitchView) {
+    createTwitchPlayerView();
+  } else {
+    try {
+      twitchView.webContents.loadURL(twitchPlayerUrl());
+    } catch (e) {}
+  }
+  centerTwitch();
+  updateTwitchBounds();
+  setTwitchLiveIndicator(twitchLive);
+  twitchWindow.show();
+  twitchWindow.focus();
+}
+
+function hideTwitch(userInitiated) {
+  if (!twitchWindow) return;
+  twitchVisible = false;
+  twitchWindow.hide();
+  if (userInitiated) twitchUserClosed = true;
+  if (mainWindow) mainWindow.focus();
+}
+
+function toggleTwitch() {
+  if (twitchVisible) hideTwitch(true);
+  else showTwitch(false);
+}
+
+// Odpytywanie statusu live bez klucza API:
+// 1) publiczny GraphQL Twitcha (dziala z przegladarkowym Client-ID),
+// 2) fallback: obraz podgladu live_user_<kanal> (404 = offline).
+async function checkTwitchLive() {
+  try {
+    const res = await fetch("https://gql.twitch.tv/gql", {
+      method: "POST",
+      headers: {
+        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify([
+        {
+          query:
+            'query{user(login:"' +
+            TWITCH_CHANNEL +
+            '"){login stream{id title type}}}',
+        },
+      ]),
+    });
+    if (res && res.ok) {
+      const data = await res.json();
+      const stream =
+        data && data[0] && data[0].data && data[0].data.user
+          ? data[0].data.user.stream
+          : null;
+      return !!(stream && (stream.type === "live" || stream.id));
+    }
+  } catch (e) {}
+
+  // fallback: miniaturka streama (istnieje tylko gdy live)
+  try {
+    const url =
+      "https://static-cdn.jtvnw.net/previews-ttv/live_user_" +
+      TWITCH_CHANNEL +
+      "-160x90.jpg?t=" +
+      Date.now();
+    const head = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return head && head.status === 200;
+  } catch (e) {}
+  return null; // nie udalo sie sprawdzic
+}
+
+function twitchPollTick() {
+  checkTwitchLive()
+    .then((live) => {
+      if (live === null) return; // blad sieci - nic nie zmieniamy
+      const wasLive = twitchLive === true;
+      twitchLive = live;
+      setTwitchLiveIndicator(live);
+
+      if (live) {
+        // przejscie offline->live: otworz okno (jesli uzytkownik nie zamknal
+        // go recznie przy poprzednim streamie)
+        if (!wasLive && !twitchUserClosed && !twitchVisible) {
+          showTwitch(true);
+        } else if (twitchVisible && twitchView) {
+          // jestesmy w oknie, a stream sie zaczal - przeladuj player
+          try {
+            twitchView.webContents.loadURL(twitchPlayerUrl());
+          } catch (e) {}
+        }
+      } else {
+        // live->offline: schowaj okno (jesli samo sie otworzylo)
+        if (twitchVisible && !twitchUserClosed) {
+          hideTwitch(false);
+        }
+      }
+    })
+    .catch(() => {});
+}
+
+function startTwitchPolling() {
+  setTimeout(twitchPollTick, 8000);
+  setInterval(twitchPollTick, 60000);
+}
+
 // ======== MIKSER GLOSNOSCI ========
 function createMixer() {
   mixerWindow = new BrowserWindow({
@@ -1080,6 +1344,14 @@ ipcMain.on("close-overlay", () => {
   hideOverlay();
 });
 
+ipcMain.on("toggle-twitch", () => {
+  toggleTwitch();
+});
+
+ipcMain.on("close-twitch", () => {
+  hideTwitch(true);
+});
+
 ipcMain.on("window-minimize", () => {
   if (mainWindow) mainWindow.minimize();
 });
@@ -1214,6 +1486,7 @@ app.whenReady().then(() => {
   setupScreenCapture();
   createMainWindow();
   createOverlay();
+  startTwitchPolling();
 
   audioControl = new AudioControl();
 

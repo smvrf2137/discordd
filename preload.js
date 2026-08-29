@@ -9,6 +9,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send("toggle-overlay");
   },
 
+  toggleTwitch: () => {
+    ipcRenderer.send("toggle-twitch");
+  },
+
+  closeTwitch: () => {
+    ipcRenderer.send("close-twitch");
+  },
+
+  onTwitchLive: (cb) => {
+    const handler = (_e, live) => {
+      try {
+        cb(live);
+      } catch (e) {}
+    };
+    ipcRenderer.on("twitch-live", handler);
+    return () => ipcRenderer.removeListener("twitch-live", handler);
+  },
+
   toggleMixer: () => {
     ipcRenderer.send("toggle-mixer");
   },

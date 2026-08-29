@@ -67,4 +67,17 @@ body {
 .window-button.sc:hover {
   background: #35373c;
   color: #ff7a33;
+}
+
+.window-button.twitch {
+  width: auto;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #bf94ff;
+}
+
+.window-button.twitch:hover {
+  background: #35373c;
+  color: #d3b3ff;
 }

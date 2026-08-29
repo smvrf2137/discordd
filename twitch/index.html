@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twitch</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="window">
+    <div class="header">
+      <span class="title">
+        <span class="dot" id="live-dot"></span>
+        Twitch&nbsp;·&nbsp;<b id="channel-name">vanqubix</b>
+        <span class="live-badge" id="live-badge">NA ŻYWO</span>
+      </span>
+      <button class="close" onclick="closeTwitch()" title="Ukryj">×</button>
+    </div>
+
+    <div class="placeholder" id="placeholder">
+      Ładowanie streama...
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -14,6 +14,10 @@ function toggleOverlay() {
   window.electronAPI.toggleOverlay();
 }
 
+function toggleTwitch() {
+  window.electronAPI.toggleTwitch();
+}
+
 function toggleMixer() {
   window.electronAPI.toggleMixer();
 }
