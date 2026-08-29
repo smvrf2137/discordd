@@ -673,16 +673,16 @@ function updateDiscordBounds() {
 // krawedzi. Nie moze byc elementem strony glownego okna, bo zaslanialby go
 // BrowserView z Discordem; osobne okno unosi sie nad wszystkimi widokami.
 const TAB_WIN_W = 44;
-const TAB_WIN_H = 100;
+const TAB_WIN_H = 120;
 
 function updateTabWindowPosition() {
   if (!mainWindow || !tabWindow) return;
   const [mainX, mainY] = mainWindow.getPosition();
   const [mainWidth, mainHeight] = mainWindow.getSize();
-  // Prawa krawedz: okno kafla ma szer. TAB_WIN_W, a sam kafelek jest w nim
-  // dosuniety do prawej (right:0). Ustawiamy okno tak, by jego prawa krawedz
-  // pokrywala sie z prawa krawedzia okna glownego (+ lekki wystaw zaokraglenia).
-  const x = mainX + mainWidth - TAB_WIN_W + 6;
+  // Prawa krawedz okna kafla zrownana z prawa krawedzia okna glownego;
+  // sam kafelek jest dosuniety do prawej (right:2px), wiec NIE wystaje.
+  // Przy najechaniu rozszerza sie w lewo.
+  const x = mainX + mainWidth - TAB_WIN_W;
   const contentY = mainY + TITLEBAR_HEIGHT;
   const contentH = mainHeight - TITLEBAR_HEIGHT;
   const y = Math.round(contentY + (contentH - TAB_WIN_H) / 2);

@@ -15,19 +15,21 @@
       user-select: none;
     }
 
-    /* Kafelek przy prawej krawedzi: w spoczynku waski (tylko ikona),
-       po najechaniu delikatnie sie wysuwa i pokazuje etykiete. */
+    /* Kafelek przy prawej krawedzi (prawa strona dosunieta do krawedzi okna).
+       W spoczynku waski - tylko ikona; po najechaniu rozszerza sie w LEWO
+       i pokazuje etykiete (bez wysuwania poza krawedz). */
     .mixer-tab {
       position: fixed;
       top: 50%;
-      right: 0;
-      transform: translateY(-50%) translateX(calc(100% - 26px));
+      right: 2px;
+      transform: translateY(-50%);
       display: flex;
       flex-direction: column;
       align-items: center;
+      justify-content: center;
       gap: 6px;
-      padding: 14px 4px;
-      width: 26px;
+      padding: 12px 0;
+      width: 28px;
       box-sizing: border-box;
       border: none;
       border-radius: 10px 0 0 10px;
@@ -35,13 +37,12 @@
       color: #fff;
       cursor: pointer;
       box-shadow: -2px 2px 10px rgba(0, 0, 0, 0.45);
-      transition: transform 0.18s ease, background 0.18s ease, width 0.18s ease;
+      transition: width 0.18s ease, background 0.18s ease;
     }
 
     .mixer-tab:hover,
     .mixer-tab.active {
-      transform: translateY(-50%) translateX(0);
-      width: 34px;
+      width: 38px;
       background: #6b76f3;
     }
 
@@ -57,6 +58,15 @@
       font-weight: 700;
       letter-spacing: 1px;
       text-transform: uppercase;
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      transition: max-height 0.18s ease, opacity 0.18s ease;
+    }
+
+    .mixer-tab:hover .mixer-tab-label,
+    .mixer-tab.active .mixer-tab-label {
+      max-height: 70px;
       opacity: 0.92;
     }
   </style>
