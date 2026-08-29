@@ -91,64 +91,105 @@ const { ipcRenderer } = require("electron");
   }
 
   // ===== Pelny ekran =====
-  // BrowserView Elektrona nie emituje pewnie enter/leave-html-full-screen,
-  // wiec pelny ekran wykrywamy tez bezposrednio w stronie: zdarzenie
-  // fullscreenchange, hook requestFullscreen/exitFullscreen oraz klawisz Esc.
-  // Main dostaje "twitch-html-fullscreen" i sam rozciaga widok na okno.
+  // W BrowserView Elektrona natywny pelny ekran zwykle NIE dziala
+  // (fullscreenElement zostaje null), przez co player "nie wie", ze jest w
+  // pelnym ekranie i przycisk/F wola w kolko requestFullscreen zamiast
+  // exitFullscreen. Dlatego prowadzimy wlasny stan (synthFs) i kazde ZADANIE
+  // pelnego ekranu traktujemy jako przelacznik. Main rozciaga widok na okno.
+  let synthFs = false;
+
   function reportFullscreen(enter) {
     try {
       ipcRenderer.send("twitch-html-fullscreen", !!enter);
     } catch (e) {}
   }
 
-  function currentFs() {
-    return !!(
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
-      document.webkitIsFullScreen
-    );
+  function setFs(on) {
+    on = !!on;
+    if (on === synthFs) return;
+    synthFs = on;
+    reportFullscreen(on);
+  }
+
+  // przerzucenie stanu przy kazdym kliknieciu przycisku / wcisnieciu F
+  function toggleFs() {
+    setFs(!synthFs);
   }
 
   function installFullscreenHook() {
     try {
-      document.addEventListener("fullscreenchange", () => reportFullscreen(currentFs()));
-      document.addEventListener("webkitfullscreenchange", () =>
-        reportFullscreen(currentFs())
-      );
+      // Gdyby natywny pelny ekran jednak dzialal, synchronizuj sie z nim.
+      const nativeFs = () =>
+        !!(
+          document.fullscreenElement ||
+          document.webkitFullscreenElement ||
+          document.webkitIsFullScreen
+        );
+      const onNativeChange = () => {
+        const n = nativeFs();
+        // natywny event jest wiazacy tylko gdy faktycznie zmienia stan
+        if (n !== synthFs) {
+          synthFs = n;
+          reportFullscreen(n);
+        }
+      };
+      document.addEventListener("fullscreenchange", onNativeChange);
+      document.addEventListener("webkitfullscreenchange", onNativeChange);
 
-      // zamiar wejscia/wyjscia - nawet gdy Electron nie zrealizuje pelnego
-      // ekranu BrowserView, my i tak rozciagniemy widok recznie w mainie
-      const hookMethod = (proto, name, enter) => {
+      // Wejscie: zatrzymaj domyslne wywolanie (natywne fs i tak nie dziala),
+      // przelicz nasz stan. Dzieki temu drugi klik = wyjscie.
+      const hookRequest = (proto, name) => {
         const orig = proto && proto[name];
         if (typeof orig !== "function" || orig.__mixerFsHooked) return;
         const wrapped = function () {
-          reportFullscreen(enter);
-          return orig.apply(this, arguments);
+          toggleFs();
+          try {
+            return orig.apply(this, arguments);
+          } catch (e) {}
+          return undefined;
         };
         wrapped.__mixerFsHooked = true;
         try {
           proto[name] = wrapped;
         } catch (e) {}
       };
-      hookMethod(Element.prototype, "requestFullscreen", true);
-      hookMethod(Element.prototype, "webkitRequestFullscreen", true);
-      hookMethod(Element.prototype, "webkitRequestFullScreen", true);
-      if (typeof document.exitFullscreen === "function") {
-        const origExit = document.exitFullscreen.bind(document);
-        document.exitFullscreen = function () {
-          reportFullscreen(false);
-          return origExit();
-        };
-      }
-      hookMethod(document, "webkitExitFullscreen", false);
-      hookMethod(document, "webkitCancelFullScreen", false);
+      hookRequest(Element.prototype, "requestFullscreen");
+      hookRequest(Element.prototype, "webkitRequestFullscreen");
+      hookRequest(Element.prototype, "webkitRequestFullScreen");
 
-      // Esc na wypadek, gdyby natywny pelny ekran nie byl aktywny
+      // Wyjscie z natywnego API (gdyby kiedykolwiek bylo uzyte)
+      const hookExit = (obj, name) => {
+        const orig = obj && obj[name];
+        if (typeof orig !== "function" || orig.__mixerFsHooked) return;
+        const wrapped = function () {
+          setFs(false);
+          try {
+            return orig.apply(this, arguments);
+          } catch (e) {}
+          return undefined;
+        };
+        wrapped.__mixerFsHooked = true;
+        try {
+          obj[name] = wrapped;
+        } catch (e) {}
+      };
+      hookExit(document, "exitFullscreen");
+      hookExit(document, "webkitExitFullscreen");
+      hookExit(document, "webkitCancelFullScreen");
+
+      // Klawisz F oraz Esc - przechwytujemy na capture, by zadzialac
+      // niezaleznie od focusu playera i niezgodnosci stanu natywnego.
       window.addEventListener(
         "keydown",
         (e) => {
-          if (e.key === "Escape" || e.key === "Esc" || e.keyCode === 27) {
-            reportFullscreen(false);
+          const key = (e.key || "").toLowerCase();
+          if (key === "f" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            // F = przelacznik pelnego ekranu (tak jak przycisk)
+            toggleFs();
+          } else if (e.key === "Escape" || e.key === "Esc" || e.keyCode === 27) {
+            if (synthFs) {
+              setFs(false);
+            }
           }
         },
         true
