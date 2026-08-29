@@ -1073,6 +1073,12 @@ function setTwitchLiveIndicator(live) {
       twitchWindow.webContents.send("twitch-live", !!live);
     }
   } catch (e) {}
+  // widok Discorda: animacja kafla kanalu #transmisja na liscie kanalow
+  try {
+    if (discordView && discordView.webContents && !discordView.webContents.isDestroyed()) {
+      discordView.webContents.send("twitch-live-state", !!live);
+    }
+  } catch (e) {}
 }
 
 function createTwitchPlayerView() {
@@ -1630,6 +1636,15 @@ function sendTwitchVolume(pct) {
 
 ipcMain.on("twitch-volume-request", () => {
   if (twitchVolume != null) sendTwitchVolume(twitchVolume);
+});
+
+// Renderer Discorda prosi o biezacy status live (po zaladowaniu strony)
+ipcMain.on("twitch-live-state-request", () => {
+  try {
+    if (discordView && discordView.webContents && !discordView.webContents.isDestroyed()) {
+      discordView.webContents.send("twitch-live-state", twitchLive === true);
+    }
+  } catch (e) {}
 });
 
 // Pelny ekran zgloszony bezposrednio z playera (twitch-preload.js).

@@ -1155,6 +1155,95 @@
     });
   }
 
+  // ===== Animacja kafla kanalu #transmisja, gdy Twitch nadaje =====
+  // Oznaczamy pozycje na liscie kanalow (lewy pasek) klasa __twLive, ktora
+  // daje subtelny czerwony "oddech" + przesuwajacy sie blysk (shimmer).
+  const CHANNEL_LIVE_CSS = `
+.__twLive{position:relative !important;}
+.__twLive > *{position:relative;z-index:1;}
+.__twLive::before{
+  content:"";position:absolute;inset:0;z-index:0;border-radius:6px;pointer-events:none;
+  background:linear-gradient(100deg,rgba(232,22,42,0.16) 0%,rgba(232,22,42,0.30) 50%,rgba(232,22,42,0.16) 100%);
+  animation:twLiveGlow 2.0s ease-in-out infinite;
+}
+.__twLive::after{
+  content:"";position:absolute;inset:0;z-index:2;border-radius:6px;pointer-events:none;
+  background:linear-gradient(110deg,transparent 0%,transparent 38%,rgba(255,255,255,0.22) 50%,transparent 62%,transparent 100%);
+  background-size:260% 100%;
+  animation:twLiveShimmer 2.6s linear infinite;
+}
+@keyframes twLiveGlow{
+  0%,100%{opacity:.55;box-shadow:inset 0 0 0 1px rgba(232,22,42,.25);}
+  50%{opacity:1;box-shadow:inset 0 0 0 1px rgba(255,70,90,.75),0 0 12px rgba(232,22,42,.35);}
+}
+@keyframes twLiveShimmer{
+  0%{background-position:160% 0;}
+  100%{background-position:-60% 0;}
+}
+.__twLive [class*="linkTop"],
+.__twLive [class*="name"]{color:#ff4d5e !important;}
+`;
+
+  function ensureChannelLiveStyle() {
+    try {
+      let s = document.getElementById("__twLiveStyle");
+      if (!s) {
+        s = document.createElement("style");
+        s.id = "__twLiveStyle";
+        (document.head || document.documentElement).appendChild(s);
+      }
+      if (s.textContent !== CHANNEL_LIVE_CSS) s.textContent = CHANNEL_LIVE_CSS;
+    } catch (e) {}
+  }
+
+  function transmisjaChannelItem() {
+    try {
+      const items = document.querySelectorAll(
+        '[data-list-item-id^="channels___"], li[data-dnd-name], li[class*="containerDefault"]'
+      );
+      for (const li of items) {
+        let name = li.getAttribute("data-dnd-name") || "";
+        if (!name) {
+          const a = li.querySelector('a[aria-label]');
+          if (a) name = a.getAttribute("aria-label") || "";
+        }
+        if (name.toLowerCase().indexOf("transmisja") !== -1) return li;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  let twLiveOn = false;
+  function setTransmisjaLive(live) {
+    try {
+      twLiveOn = !!live;
+      if (!twLiveOn) {
+        document.querySelectorAll(".__twLive").forEach((el) => el.classList.remove("__twLive"));
+        return;
+      }
+      ensureChannelLiveStyle();
+      const li = transmisjaChannelItem();
+      if (li && !li.classList.contains("__twLive")) li.classList.add("__twLive");
+    } catch (e) {}
+  }
+
+  if (bridge.onTwitchLive) {
+    bridge.onTwitchLive((live) => {
+      setTransmisjaLive(live);
+    });
+  }
+  // popros o biezacy stan (po zaladowaniu strony / odswiezeniu Discorda)
+  try {
+    if (bridge.requestTwitchLive) bridge.requestTwitchLive();
+  } catch (e) {}
+
+  // React przerenderowuje liste kanalow - gdy live, ponawiaj oznaczenie kafla
+  setInterval(() => {
+    if (twLiveOn) setTransmisjaLive(true);
+  }, 1500);
+
+
+
   // ===== GLOWNA PENTLA =====
   let lastPayload = "";
   let tickCount = 0;

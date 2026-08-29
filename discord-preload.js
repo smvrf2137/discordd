@@ -56,6 +56,25 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     } catch (e) {}
   },
 
+  // main -> strona: status live Twitcha (true/false) - do animacji kafla
+  // kanalu #transmisja na liscie kanalow
+  onTwitchLive: (cb) => {
+    const handler = (_e, live) => {
+      try {
+        cb(!!live);
+      } catch (e) {}
+    };
+    ipcRenderer.on("twitch-live-state", handler);
+    return () => ipcRenderer.removeListener("twitch-live-state", handler);
+  },
+
+  // strona -> main: popros o biezacy status live (po zaladowaniu strony)
+  requestTwitchLive: () => {
+    try {
+      ipcRenderer.send("twitch-live-state-request");
+    } catch (e) {}
+  },
+
   // main -> strona: zmierz ponownie obszar czatu (resize okna itp.)
   onTwitchEmbedMeasure: (fn) => {
     try {
