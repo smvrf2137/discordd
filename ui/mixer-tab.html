@@ -37,8 +37,7 @@
       color: #fff;
       cursor: pointer;
       box-shadow: -2px 2px 10px rgba(0, 0, 0, 0.45);
-      transition: width 0.18s ease, background 0.18s ease, box-shadow 0.3s ease;
-      overflow: visible;
+      transition: width 0.18s ease, background 0.18s ease;
     }
 
     .mixer-tab:hover,
@@ -50,77 +49,6 @@
     .mixer-tab-icon {
       font-size: 16px;
       line-height: 1;
-    }
-
-    /* ===== Tryb LIVE (stream nadaje) - imersyjna animacja ===== */
-    .mixer-tab.live {
-      background: linear-gradient(180deg, #e01e37 0%, #b01424 100%);
-      animation: tabBreathe 2.2s ease-in-out infinite;
-    }
-
-    .mixer-tab.live:hover,
-    .mixer-tab.live.active {
-      background: linear-gradient(180deg, #ff2d4b 0%, #c81626 100%);
-    }
-
-    /* "oddech" calego kafla: naprzemienne przyblizanie i czerwona poswiata */
-    @keyframes tabBreathe {
-      0%,
-      100% {
-        box-shadow: -2px 2px 10px rgba(224, 30, 55, 0.35);
-        filter: saturate(1);
-      }
-      50% {
-        box-shadow: -2px 2px 22px rgba(224, 30, 55, 0.85),
-          0 0 14px rgba(255, 60, 80, 0.55);
-        filter: saturate(1.25);
-      }
-    }
-
-    /* czerwona kropka LIVE w rogu, pusujaca */
-    .live-dot {
-      position: absolute;
-      top: 6px;
-      left: 6px;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #ff3b3b;
-      border: 1.5px solid rgba(255, 255, 255, 0.9);
-      opacity: 0;
-      transform: scale(0.4);
-      transition: opacity 0.25s ease, transform 0.25s ease;
-      pointer-events: none;
-    }
-
-    .mixer-tab.live .live-dot {
-      opacity: 1;
-      transform: scale(1);
-      animation: dotPulse 1.4s ease-in-out infinite;
-    }
-
-    @keyframes dotPulse {
-      0%,
-      100% {
-        box-shadow: 0 0 0 0 rgba(255, 59, 59, 0.7);
-      }
-      70% {
-        box-shadow: 0 0 0 6px rgba(255, 59, 59, 0);
-      }
-    }
-
-    /* napis LIVE zamiast "Mikser" po najechaniu, gdy stream nadaje */
-    .mixer-tab .live-label {
-      display: none;
-      color: #ffd7da;
-    }
-    .mixer-tab.live:hover .live-label,
-    .mixer-tab.live.active .live-label {
-      display: block;
-    }
-    .mixer-tab.live:hover .mixer-tab-label,
-    .mixer-tab.live.active .mixer-tab-label {
-      display: none;
     }
 
     .mixer-tab-label {
@@ -145,10 +73,8 @@
 </head>
 <body>
   <button id="mixer-tab" class="mixer-tab" title="Mikser głośności">
-    <span class="live-dot"></span>
     <span class="mixer-tab-icon">🔊</span>
     <span class="mixer-tab-label">Mikser</span>
-    <span class="mixer-tab-label live-label">● LIVE</span>
   </button>
 
   <script>
@@ -162,18 +88,6 @@
       window.electronAPI.onMixerActive((active) => {
         if (active) tab.classList.add("active");
         else tab.classList.remove("active");
-      });
-    }
-    // status live z maina: live = pulsujaca animacja + kropka
-    if (window.electronAPI && window.electronAPI.onTwitchLive) {
-      window.electronAPI.onTwitchLive((live) => {
-        if (live) {
-          tab.classList.add("live");
-          tab.title = "Mikser głośności — Twitch LIVE";
-        } else {
-          tab.classList.remove("live");
-          tab.title = "Mikser głośności";
-        }
       });
     }
   </script>
