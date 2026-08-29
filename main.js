@@ -817,9 +817,27 @@ function createMixer() {
 
   mixerWindow.loadFile(path.join(__dirname, "mixer", "index.html"));
 
+  // Klikniecie w tle (utrata fokusu) chowa mikser. Mala zwloka pozwala
+  // odroznic przejscie fokusu do okna otwartego z miksera od klikniecia w tlo.
+  mixerWindow.on("blur", () => {
+    if (!mixerVisible) return;
+    setTimeout(() => {
+      try {
+        if (!mixerWindow || mixerWindow.isDestroyed()) return;
+        if (!mixerVisible) return;
+        const f = BrowserWindow.getFocusedWindow();
+        if (f === mixerWindow) return;
+        hideMixer();
+      } catch (e) {
+        hideMixer();
+      }
+    }, 120);
+  });
+
   mixerWindow.on("closed", () => {
     mixerWindow = null;
     mixerVisible = false;
+    setMixerTabActive(false);
   });
 }
 
@@ -877,20 +895,64 @@ ipcMain.on("mixer-set-soundcloud-volume", (_event, data) => {
   sendAppsToMixer();
 });
 
-function centerMixer() {
-  if (!mainWindow || !mixerWindow) return;
+// Docelowa pozycja miksera: zadokowany do prawej krawedzi okna glownego,
+// pod paskiem tytulowym i wysrodkowany w pionie.
+function mixerTargetPosition() {
+  if (!mainWindow || !mixerWindow) return null;
 
   const [mainX, mainY] = mainWindow.getPosition();
   const [mainWidth, mainHeight] = mainWindow.getSize();
   const [mixerWidth, mixerHeight] = mixerWindow.getSize();
 
-  const x = mainX + Math.floor((mainWidth - mixerWidth) / 2);
+  const x = mainX + mainWidth - mixerWidth - 12;
   const y =
     mainY +
     TITLEBAR_HEIGHT +
-    Math.floor((mainHeight - TITLEBAR_HEIGHT - mixerHeight) / 2);
+    Math.max(12, Math.floor((mainHeight - TITLEBAR_HEIGHT - mixerHeight) / 2));
 
-  mixerWindow.setPosition(x, y);
+  return { x, y };
+}
+
+function centerMixer() {
+  const pos = mixerTargetPosition();
+  if (pos) mixerWindow.setPosition(pos.x, pos.y);
+}
+
+let mixerSlideTimer = null;
+
+// Wysuwanie miksera z prawej krawedzi (animacja pozycji).
+function slideMixerIn() {
+  if (mixerSlideTimer) {
+    clearInterval(mixerSlideTimer);
+    mixerSlideTimer = null;
+  }
+  const pos = mixerTargetPosition();
+  if (!pos) return;
+  const startX = pos.x + 40; // start lekko poza prawa krawedzia
+  let step = 0;
+  const total = 6;
+  mixerWindow.setPosition(startX, pos.y);
+  mixerWindow.show();
+  mixerSlideTimer = setInterval(() => {
+    step++;
+    const t = step / total;
+    const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+    const x = Math.round(startX + (pos.x - startX) * ease);
+    mixerWindow.setPosition(x, pos.y);
+    if (step >= total) {
+      clearInterval(mixerSlideTimer);
+      mixerSlideTimer = null;
+      mixerWindow.setPosition(pos.x, pos.y);
+    }
+  }, 16);
+}
+
+function setMixerTabActive(active) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("mixer-active", !!active);
+    }
+  } catch (e) {}
 }
 
 function showMixer() {
@@ -900,8 +962,9 @@ function showMixer() {
 
   mixerVisible = true;
   centerMixer();
-  mixerWindow.show();
+  slideMixerIn();
   mixerWindow.focus();
+  setMixerTabActive(true);
 
   // wyslanie swiezego stanu
   if (audioControl && mixerWindow) {
@@ -914,6 +977,7 @@ function hideMixer() {
   if (!mixerWindow) return;
   mixerVisible = false;
   mixerWindow.hide();
+  setMixerTabActive(false);
   if (mainWindow) mainWindow.focus();
 }
 

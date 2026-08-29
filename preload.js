@@ -13,6 +13,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send("toggle-mixer");
   },
 
+  onMixerActive: (cb) => {
+    const handler = (_e, active) => {
+      try {
+        cb(active);
+      } catch (e) {}
+    };
+    ipcRenderer.on("mixer-active", handler);
+    return () => ipcRenderer.removeListener("mixer-active", handler);
+  },
+
   minimize: () => {
     ipcRenderer.send("window-minimize");
   },
