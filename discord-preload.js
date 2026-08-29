@@ -8,6 +8,14 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     } catch (e) {}
   },
 
+  // strona -> main: obszar czatu na kanale #transmisja (do osadzenia live)
+  // rect = {x,y,width,height} (wspolrzedne wzgledem strony) lub null
+  pushTwitchEmbed: (rect) => {
+    try {
+      ipcRenderer.send("twitch-embed-rect", rect);
+    } catch (e) {}
+  },
+
   // main -> strona: zadanie ustawienia glosnosci uzytkownika
   onSetUserVolume: (cb) => {
     const handler = (_e, data) => {
@@ -44,6 +52,17 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
   debug: (msg) => {
     try {
       ipcRenderer.send("mixer-debug", "[discord] " + String(msg));
+    } catch (e) {}
+  },
+
+  // main -> strona: zmierz ponownie obszar czatu (resize okna itp.)
+  onTwitchEmbedMeasure: (fn) => {
+    try {
+      ipcRenderer.on("twitch-embed-measure", () => {
+        try {
+          fn();
+        } catch (e) {}
+      });
     } catch (e) {}
   },
 });

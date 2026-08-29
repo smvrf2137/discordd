@@ -1031,6 +1031,75 @@
     return users;
   }
 
+  // ===== LIVE TWITCH W KANALE #transmisja =====
+  // Gdy uzytkownik jest na kanale tekstowym o nazwie zawierajacej "transmisja",
+  // mierzymy obszar listy wiadomosci (nad polem pisania) i wysylamy jego
+  // wspolrzedne do maina, by nakladac na niego player Twitcha.
+  function isTransmisjaChannel() {
+    try {
+      const main = document.querySelector("main[class*=\"chatContent\"]");
+      if (main) {
+        const lbl = (main.getAttribute("aria-label") || "").toLowerCase();
+        if (lbl.indexOf("transmisja") !== -1) return true;
+      }
+      // fallback: naglowek kanalu (h1 tytulu; klasy haszowane -> prefiks)
+      const h1 = document.querySelector("section[aria-label=\"Nagłówek kanału\"] h1, h1[class*=\"title__\"]");
+      if (h1 && (h1.textContent || "").toLowerCase().indexOf("transmisja") !== -1) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function measureChatArea() {
+    try {
+      // obszar listy wiadomosci
+      const wrap = document.querySelector("div[class*=\"messagesWrapper\"]");
+      let el = wrap;
+      if (!el) {
+        const ol = document.querySelector("ol[data-list-id=\"chat-messages\"]");
+        el = ol && ol.closest("[class*=\"scroller\"]");
+      }
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width < 200 || r.height < 150) return null;
+      return {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  let lastTwitchRectSig = "";
+  function detectTransmisja() {
+    try {
+      if (!isTransmisjaChannel()) {
+        if (lastTwitchRectSig !== "none") {
+          lastTwitchRectSig = "none";
+          bridge.pushTwitchEmbed(null);
+        }
+        return;
+      }
+      const rect = measureChatArea();
+      if (!rect) return;
+      const sig = rect.x + "," + rect.y + "," + rect.width + "," + rect.height;
+      if (sig !== lastTwitchRectSig) {
+        lastTwitchRectSig = sig;
+        bridge.pushTwitchEmbed(rect);
+      }
+    } catch (e) {}
+  }
+
+  // main prosi o ponowny pomiar (zmiana rozmiaru okna / zamkniecie okna Twitcha)
+  if (bridge.onTwitchEmbedMeasure) {
+    bridge.onTwitchEmbedMeasure(() => {
+      lastTwitchRectSig = ""; // wymus wyslanie swiezego rect
+      detectTransmisja();
+    });
+  }
+
   // ===== GLOWNA PENTLA =====
   let lastPayload = "";
   let tickCount = 0;
@@ -1116,6 +1185,9 @@
           bridge.pushUsers(users);
         } catch (e) {}
       }
+
+      // osadzenie live Twitcha w kanale #transmisja
+      detectTransmisja();
 
       tickCount++;
       if (tickCount % 7 === 0) {

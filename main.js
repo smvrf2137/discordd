@@ -37,6 +37,12 @@ let twitchLoaded = false; // player juz zaladowany
 let twitchLive = null; // null=nieznany stan, true/false z odpytywania
 let twitchUserClosed = false; // uzytkownik recznie zamknal okno
 
+// Player osadzony WEWNATRZ okna Discorda, nad obszarem wiadomosci kanalu
+// tekstowego "transmisja" (rect mierzony po stronie renderera Discorda).
+let twitchEmbedView = null;
+let twitchEmbedVisible = false;
+let lastTwitchEmbedRect = null;
+
 let mixerWindow = null;
 let mixerVisible = false;
 let audioControl = null;
@@ -611,6 +617,8 @@ function createMainWindow() {
       centerMixer();
     }
     updateTabWindowPosition();
+    updateTwitchEmbedBounds();
+    requestTwitchEmbedMeasure();
   });
 
   mainWindow.on("maximize", () => {
@@ -624,6 +632,8 @@ function createMainWindow() {
       centerMixer();
     }
     updateTabWindowPosition();
+    updateTwitchEmbedBounds();
+    requestTwitchEmbedMeasure();
   });
 
   mainWindow.on("unmaximize", () => {
@@ -637,6 +647,8 @@ function createMainWindow() {
       centerMixer();
     }
     updateTabWindowPosition();
+    updateTwitchEmbedBounds();
+    requestTwitchEmbedMeasure();
   });
 
   mainWindow.on("minimize", () => {
@@ -959,6 +971,7 @@ function createTwitchPlayerView() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
   twitchWindow.addBrowserView(twitchView);
@@ -1030,6 +1043,8 @@ function showTwitch(autoOpened) {
   if (!twitchWindow) createTwitchWindow();
   twitchVisible = true;
   if (autoOpened) twitchUserClosed = false;
+  // osadzony player schowany, by nie gral dwa razy
+  if (twitchEmbedVisible) hideTwitchEmbed();
   // zaladuj player (lub przeladuj, by zlapac poczatek streama)
   if (!twitchView) {
     createTwitchPlayerView();
@@ -1051,11 +1066,112 @@ function hideTwitch(userInitiated) {
   twitchWindow.hide();
   if (userInitiated) twitchUserClosed = true;
   if (mainWindow) mainWindow.focus();
+  // powrot do osadzonego playera, jesli jestesmy na kanale #transmisja
+  lastTwitchEmbedRect = null; // wymus ponowny pomiar/ustawienie
+  requestTwitchEmbedMeasure();
 }
 
 function toggleTwitch() {
   if (twitchVisible) hideTwitch(true);
   else showTwitch(false);
+}
+
+// ======== LIVE W KANALE #transmisja (BrowserView nakladany na czat) ========
+// rect pochodzi z getBoundingClientRect() w widoku Discorda: poczatek ukladu
+// wspolrzednych strony = poczatek obszaru pod paskiem tytulowym, a BrowserView
+// uzywa wspolrzednych zawartosci okna (poczatek tez pod paskiem) - wystarczy
+// wiec przelozyc x/y bezposrednio.
+function updateTwitchEmbedBounds() {
+  if (!mainWindow || !twitchEmbedView || !lastTwitchEmbedRect) return;
+  const r = lastTwitchEmbedRect;
+  try {
+    twitchEmbedView.setBounds({
+      x: Math.round(r.x),
+      y: TITLEBAR_HEIGHT + Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    });
+  } catch (e) {}
+}
+
+function createTwitchEmbedView() {
+  if (twitchEmbedView) return twitchEmbedView;
+  twitchEmbedView = new BrowserView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      autoplayPolicy: "no-user-gesture-required",
+    },
+  });
+
+  const wc = twitchEmbedView.webContents;
+  wc.setUserAgent(USER_AGENT);
+
+  wc.on("did-finish-load", () => {
+    wc.insertCSS("html,body{background:#0e0e10 !important;}").catch(() => {});
+  });
+
+  wc.on("did-fail-load", (_e, errorCode, _errorDesc, validatedURL) => {
+    if (errorCode === -3) return;
+    try {
+      const url = String(validatedURL || "");
+      if (url.indexOf("player.twitch.tv") !== -1) {
+        wc.loadURL("https://www.twitch.tv/" + TWITCH_CHANNEL);
+      }
+    } catch (e) {}
+  });
+
+  return twitchEmbedView;
+}
+
+function showTwitchEmbed() {
+  if (!mainWindow) return;
+  if (!lastTwitchEmbedRect) return;
+  // osobne okno Twitcha otwarte = nie dublujemy playera (audio x2)
+  if (twitchVisible) return;
+
+  createTwitchEmbedView();
+  try {
+    // widok mogl byc zdjety z okna przy wyjsciu z kanalu (hideTwitchEmbed)
+    if (!mainWindow.getBrowserViews().includes(twitchEmbedView)) {
+      mainWindow.addBrowserView(twitchEmbedView);
+    }
+    const url = twitchPlayerUrl();
+    if (twitchEmbedView.webContents.getURL() !== url) {
+      twitchEmbedView.webContents.loadURL(url);
+    }
+  } catch (e) {}
+
+  twitchEmbedVisible = true;
+  updateTwitchEmbedBounds();
+}
+
+function hideTwitchEmbed(blank) {
+  twitchEmbedVisible = false;
+  lastTwitchEmbedRect = null;
+  if (!twitchEmbedView) return;
+  try {
+    // zatrzymaj audio playera (schowane widoki dalej odtwarzaja dzwiek)
+    if (blank !== false) {
+      twitchEmbedView.webContents.loadURL("about:blank");
+    }
+    mainWindow.removeBrowserView(twitchEmbedView);
+  } catch (e) {}
+}
+
+function reloadTwitchEmbedPlayer() {
+  if (!twitchEmbedView || !twitchEmbedVisible) return;
+  try {
+    twitchEmbedView.webContents.loadURL(twitchPlayerUrl());
+  } catch (e) {}
+}
+
+function requestTwitchEmbedMeasure() {
+  try {
+    if (discordView && !discordView.webContents.isDestroyed()) {
+      discordView.webContents.send("twitch-embed-measure");
+    }
+  } catch (e) {}
 }
 
 // Odpytywanie statusu live bez klucza API:
@@ -1110,22 +1226,19 @@ function twitchPollTick() {
       setTwitchLiveIndicator(live);
 
       if (live) {
-        // przejscie offline->live: otworz okno (jesli uzytkownik nie zamknal
-        // go recznie przy poprzednim streamie)
-        if (!wasLive && !twitchUserClosed && !twitchVisible) {
-          showTwitch(true);
-        } else if (twitchVisible && twitchView) {
-          // jestesmy w oknie, a stream sie zaczal - przeladuj player
-          try {
-            twitchView.webContents.loadURL(twitchPlayerUrl());
-          } catch (e) {}
-        }
-      } else {
-        // live->offline: schowaj okno (jesli samo sie otworzylo)
-        if (twitchVisible && !twitchUserClosed) {
-          hideTwitch(false);
+        // przejscie offline->live: przeladuj playery, by zlapac poczatek
+        // streama (osadzony w kanale #transmisja + osobne okno jesli otwarte)
+        if (!wasLive) {
+          reloadTwitchEmbedPlayer();
+          if (twitchVisible && twitchView) {
+            try {
+              twitchView.webContents.loadURL(twitchPlayerUrl());
+            } catch (e) {}
+          }
         }
       }
+      // Osadzony player pokazuje sam, gdy kanal jest offline; okna nie
+      // otwieramy/zamykamy automatycznie (decyduje uzytkownik przyciskiem).
     })
     .catch(() => {});
 }
@@ -1426,6 +1539,24 @@ ipcMain.on("mixer-users-update", (event, users) => {
   if (mixerWindow && !mixerWindow.isDestroyed()) {
     mixerWindow.webContents.send("mixer-users", users);
   }
+});
+
+// rect = {x,y,width,height} obszaru wiadomosci na kanale #transmisja
+// (wspolrzedne strony/widoku Discorda) lub null = inny kanal.
+ipcMain.on("twitch-embed-rect", (event, rect) => {
+  if (!discordView) return;
+  if (event.sender !== discordView.webContents) return;
+  if (mainWindow && mainWindow.isDestroyed && mainWindow.isDestroyed()) return;
+
+  if (!rect || typeof rect !== "object") {
+    if (twitchEmbedVisible) hideTwitchEmbed();
+    return;
+  }
+  if (twitchVisible) return; // osobne okno Twitcha otwarte - nie dublujemy
+
+  lastTwitchEmbedRect = rect;
+  if (!twitchEmbedVisible) showTwitchEmbed();
+  else updateTwitchEmbedBounds();
 });
 
 function setupScreenCapture() {
