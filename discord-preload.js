@@ -8,8 +8,9 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     } catch (e) {}
   },
 
-  // strona -> main: obszar czatu na kanale #transmisja (do osadzenia live)
-  // rect = {x,y,width,height} (wspolrzedne wzgledem strony) lub null
+  // strona -> main: obszary na kanale #transmisja do osadzenia Twitcha
+  // rect = { player: {x,y,width,height}, chat: {x,y,width,height}|null }
+  // (wspolrzedne wzgledem strony) lub null (inny kanal)
   pushTwitchEmbed: (rect) => {
     try {
       ipcRenderer.send("twitch-embed-rect", rect);

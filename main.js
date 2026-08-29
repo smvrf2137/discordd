@@ -43,6 +43,11 @@ let twitchEmbedView = null;
 let twitchEmbedVisible = false;
 let lastTwitchEmbedRect = null;
 
+// Czat Twitcha osadzony w miejscu panelu czlonkow (prawa strona czatu).
+let twitchChatView = null;
+let twitchChatVisible = false;
+let lastTwitchChatRect = null;
+
 let mixerWindow = null;
 let mixerVisible = false;
 let audioControl = null;
@@ -618,6 +623,7 @@ function createMainWindow() {
     }
     updateTabWindowPosition();
     updateTwitchEmbedBounds();
+    updateTwitchChatBounds();
     requestTwitchEmbedMeasure();
   });
 
@@ -633,6 +639,7 @@ function createMainWindow() {
     }
     updateTabWindowPosition();
     updateTwitchEmbedBounds();
+    updateTwitchChatBounds();
     requestTwitchEmbedMeasure();
   });
 
@@ -648,6 +655,7 @@ function createMainWindow() {
     }
     updateTabWindowPosition();
     updateTwitchEmbedBounds();
+    updateTwitchChatBounds();
     requestTwitchEmbedMeasure();
   });
 
@@ -1043,8 +1051,9 @@ function showTwitch(autoOpened) {
   if (!twitchWindow) createTwitchWindow();
   twitchVisible = true;
   if (autoOpened) twitchUserClosed = false;
-  // osadzony player schowany, by nie gral dwa razy
+  // osadzone player/czat schowane, by nie gral/wyswietlal sie dwa razy
   if (twitchEmbedVisible) hideTwitchEmbed();
+  if (twitchChatVisible) hideTwitchChat();
   // zaladuj player (lub przeladuj, by zlapac poczatek streama)
   if (!twitchView) {
     createTwitchPlayerView();
@@ -1171,6 +1180,86 @@ function requestTwitchEmbedMeasure() {
     if (discordView && !discordView.webContents.isDestroyed()) {
       discordView.webContents.send("twitch-embed-measure");
     }
+  } catch (e) {}
+}
+
+// ======== CZAT TWITCHA W PANELU CZLONKOW ========
+function twitchChatUrl() {
+  // Popout czatu kanalu (dziala samodzielnie, bez logowania, tylko do czytania).
+  return "https://www.twitch.tv/popout/" + TWITCH_CHANNEL + "/chat?darkpopout";
+}
+
+function updateTwitchChatBounds() {
+  if (!mainWindow || !twitchChatView || !lastTwitchChatRect) return;
+  const r = lastTwitchChatRect;
+  try {
+    twitchChatView.setBounds({
+      x: Math.round(r.x),
+      y: TITLEBAR_HEIGHT + Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    });
+  } catch (e) {}
+}
+
+function createTwitchChatView() {
+  if (twitchChatView) return twitchChatView;
+  twitchChatView = new BrowserView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  const wc = twitchChatView.webContents;
+  wc.setUserAgent(USER_AGENT);
+
+  wc.on("did-finish-load", () => {
+    wc.insertCSS("html,body{background:#0e0e10 !important;}").catch(() => {});
+  });
+
+  wc.on("did-fail-load", (_e, errorCode, _errorDesc, _validatedURL) => {
+    if (errorCode === -3) return;
+  });
+
+  return twitchChatView;
+}
+
+function showTwitchChat(rect) {
+  if (!mainWindow) return;
+  if (!rect || typeof rect !== "object") {
+    hideTwitchChat();
+    return;
+  }
+  if (twitchVisible) {
+    // osobne okno Twitcha otwarte - nie pokazujemy czatu (jest w oknie)
+    hideTwitchChat();
+    return;
+  }
+
+  lastTwitchChatRect = rect;
+  createTwitchChatView();
+  try {
+    if (!mainWindow.getBrowserViews().includes(twitchChatView)) {
+      mainWindow.addBrowserView(twitchChatView);
+    }
+    const url = twitchChatUrl();
+    if (twitchChatView.webContents.getURL() !== url) {
+      twitchChatView.webContents.loadURL(url);
+    }
+  } catch (e) {}
+
+  twitchChatVisible = true;
+  updateTwitchChatBounds();
+}
+
+function hideTwitchChat() {
+  twitchChatVisible = false;
+  lastTwitchChatRect = null;
+  if (!twitchChatView) return;
+  try {
+    twitchChatView.webContents.loadURL("about:blank");
+    mainWindow.removeBrowserView(twitchChatView);
   } catch (e) {}
 }
 
@@ -1541,8 +1630,8 @@ ipcMain.on("mixer-users-update", (event, users) => {
   }
 });
 
-// rect = {x,y,width,height} obszaru wiadomosci na kanale #transmisja
-// (wspolrzedne strony/widoku Discorda) lub null = inny kanal.
+// rect = { player:{x,y,width,height}, chat:{...}|null } obszarow na kanale
+// #transmisja (wspolrzedne strony/widoku Discorda) lub null = inny kanal.
 ipcMain.on("twitch-embed-rect", (event, rect) => {
   if (!discordView) return;
   if (event.sender !== discordView.webContents) return;
@@ -1550,13 +1639,34 @@ ipcMain.on("twitch-embed-rect", (event, rect) => {
 
   if (!rect || typeof rect !== "object") {
     if (twitchEmbedVisible) hideTwitchEmbed();
+    if (twitchChatVisible) hideTwitchChat();
     return;
   }
-  if (twitchVisible) return; // osobne okno Twitcha otwarte - nie dublujemy
+  if (twitchVisible) {
+    // osobne okno Twitcha otwarte - nie dublujemy playera ani czatu
+    if (twitchChatVisible) hideTwitchChat();
+    return;
+  }
 
-  lastTwitchEmbedRect = rect;
-  if (!twitchEmbedVisible) showTwitchEmbed();
-  else updateTwitchEmbedBounds();
+  // player
+  if (rect.player) {
+    lastTwitchEmbedRect = rect.player;
+    if (!twitchEmbedVisible) showTwitchEmbed();
+    else updateTwitchEmbedBounds();
+  } else if (twitchEmbedVisible) {
+    hideTwitchEmbed();
+  }
+
+  // czat (panel czlonkow)
+  if (rect.chat) {
+    if (!twitchChatVisible) showTwitchChat(rect.chat);
+    else {
+      lastTwitchChatRect = rect.chat;
+      updateTwitchChatBounds();
+    }
+  } else if (twitchChatVisible) {
+    hideTwitchChat();
+  }
 });
 
 function setupScreenCapture() {

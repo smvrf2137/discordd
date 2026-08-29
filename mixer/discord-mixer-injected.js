@@ -1088,22 +1088,69 @@
     }
   }
 
+  // Prawy panel: lista czlonkow (miejsce na czat Twitcha). Gdy jest
+  // schowany (klasa hiddenMembers), wymuszamy jego widocznosc CSS-em.
+  const MEMBERS_FORCE_CSS =
+    "aside[class*='membersWrap']{" +
+    "display:flex !important; visibility:visible !important; opacity:1 !important;" +
+    "width:240px !important; min-width:240px !important; max-width:240px !important;" +
+    "flex:0 0 240px !important;}";
+
+  function setMembersForced(on) {
+    try {
+      let style = document.getElementById("__twitchChatForce");
+      if (on) {
+        if (!style) {
+          style = document.createElement("style");
+          style.id = "__twitchChatForce";
+          (document.head || document.documentElement).appendChild(style);
+        }
+        style.textContent = MEMBERS_FORCE_CSS;
+      } else if (style) {
+        style.remove();
+      }
+    } catch (e) {}
+  }
+
+  function measureMembersArea() {
+    try {
+      const aside = document.querySelector("aside[class*=\"membersWrap\"]");
+      if (!aside) return null;
+      const r = aside.getBoundingClientRect();
+      if (r.width < 150 || r.height < 200) return null;
+      return {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
   let lastTwitchRectSig = "";
   function detectTransmisja() {
     try {
       if (!isTransmisjaChannel()) {
+        setMembersForced(false);
         if (lastTwitchRectSig !== "none") {
           lastTwitchRectSig = "none";
           bridge.pushTwitchEmbed(null);
         }
         return;
       }
-      const rect = measureChatArea();
-      if (!rect) return;
-      const sig = rect.x + "," + rect.y + "," + rect.width + "," + rect.height;
+      // panel czlonkow ma byc widoczny (tam wyladuje czat Twitcha)
+      setMembersForced(true);
+
+      const player = measureChatArea();
+      if (!player) return;
+      const chat = measureMembersArea();
+      const payload = { player: player, chat: chat };
+      const sig = JSON.stringify(payload);
       if (sig !== lastTwitchRectSig) {
         lastTwitchRectSig = sig;
-        bridge.pushTwitchEmbed(rect);
+        bridge.pushTwitchEmbed(payload);
       }
     } catch (e) {}
   }
