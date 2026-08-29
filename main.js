@@ -46,6 +46,7 @@ let twitchUserClosed = false; // uzytkownik recznie zamknal okno
 // tekstowego "transmisja" (rect mierzony po stronie renderera Discorda).
 let twitchEmbedView = null;
 let twitchEmbedVisible = false;
+let twitchEmbedFullscreen = false; // player w trybie pelnego ekranu
 let lastTwitchEmbedRect = null;
 
 // Czat Twitcha osadzony w miejscu panelu czlonkow (prawa strona czatu).
@@ -997,15 +998,27 @@ function centerTwitch() {
   twitchWindow.setPosition(x, y);
 }
 
+let twitchFullscreen = false;
+
 function updateTwitchBounds() {
   if (!twitchWindow || !twitchView) return;
   const [width, height] = twitchWindow.getContentSize();
+  if (twitchFullscreen) {
+    // pelny ekran: player na calym oknie (naglowek pod spodem)
+    twitchView.setBounds({ x: 0, y: 0, width: width, height: height });
+    return;
+  }
   twitchView.setBounds({
     x: 0,
     y: TWITCH_HEADER_HEIGHT,
     width: width,
     height: Math.max(1, height - TWITCH_HEADER_HEIGHT),
   });
+}
+
+function onTwitchFullscreen(enter) {
+  twitchFullscreen = !!enter;
+  updateTwitchBounds();
 }
 
 function setTwitchLiveIndicator(live) {
@@ -1055,6 +1068,10 @@ function createTwitchPlayerView() {
     } catch (e) {}
   });
 
+  // pelny ekran playera w osobnym oknie
+  wc.on("enter-html-full-screen", () => onTwitchFullscreen(true));
+  wc.on("leave-html-full-screen", () => onTwitchFullscreen(false));
+
   return twitchView;
 }
 
@@ -1091,6 +1108,7 @@ function createTwitchWindow() {
     twitchView = null;
     twitchLoaded = false;
     twitchVisible = false;
+    twitchFullscreen = false;
   });
 
   // player tworzymy dopiero przy pierwszym pokazaniu (oszczednosc zasobow)
@@ -1140,15 +1158,46 @@ function toggleTwitch() {
 // uzywa wspolrzednych zawartosci okna (poczatek tez pod paskiem) - wystarczy
 // wiec przelozyc x/y bezposrednio.
 function updateTwitchEmbedBounds() {
-  if (!mainWindow || !twitchEmbedView || !lastTwitchEmbedRect) return;
-  const r = lastTwitchEmbedRect;
+  if (!mainWindow || !twitchEmbedView) return;
   try {
+    if (twitchEmbedFullscreen) {
+      // Pelny ekran: player rozciagniety na CALY obszar aplikacji (pod
+      // paskiem tytulowym). Czat chowamy, by nie zachodzil na obraz.
+      const [width, height] = mainWindow.getContentSize();
+      twitchEmbedView.setBounds({
+        x: 0,
+        y: TITLEBAR_HEIGHT,
+        width: width,
+        height: Math.max(1, height - TITLEBAR_HEIGHT),
+      });
+      return;
+    }
+    if (!lastTwitchEmbedRect) return;
+    const r = lastTwitchEmbedRect;
     twitchEmbedView.setBounds({
       x: Math.round(r.x),
       y: TITLEBAR_HEIGHT + Math.round(r.y),
       width: Math.round(r.width),
       height: Math.round(r.height),
     });
+  } catch (e) {}
+}
+
+// Player Twitcha poprosil o pelny ekran (przycisk "Pełny ekran" lub F).
+// BrowserView nie robi tego automatycznie - sami rozciagamy widok na
+// cale okno i chowamy czat; wyjscie (Esc/przycisk) przywraca zwykle boksy.
+function onTwitchEmbedFullscreen(enter) {
+  try {
+    twitchEmbedFullscreen = !!enter;
+    if (twitchEmbedFullscreen) {
+      if (twitchChatVisible) hideTwitchChat();
+    }
+    updateTwitchEmbedBounds();
+    if (!twitchEmbedFullscreen) {
+      // przywroc czat i zwykle polozenie playera po wyjsciu z pelnego ekranu
+      lastTwitchEmbedRect = null;
+      requestTwitchEmbedMeasure();
+    }
   } catch (e) {}
 }
 
@@ -1188,6 +1237,10 @@ function createTwitchEmbedView() {
     } catch (e) {}
   });
 
+  // pelny ekran z poziomu playera Twitcha
+  wc.on("enter-html-full-screen", () => onTwitchEmbedFullscreen(true));
+  wc.on("leave-html-full-screen", () => onTwitchEmbedFullscreen(false));
+
   return twitchEmbedView;
 }
 
@@ -1215,6 +1268,7 @@ function showTwitchEmbed() {
 
 function hideTwitchEmbed(blank) {
   twitchEmbedVisible = false;
+  twitchEmbedFullscreen = false;
   lastTwitchEmbedRect = null;
   if (!twitchEmbedView) return;
   try {
@@ -1777,15 +1831,17 @@ ipcMain.on("twitch-embed-rect", (event, rect) => {
     hideTwitchEmbed();
   }
 
-  // czat (panel czlonkow)
-  if (rect.chat) {
-    if (!twitchChatVisible) showTwitchChat(rect.chat);
-    else {
-      lastTwitchChatRect = rect.chat;
-      updateTwitchChatBounds();
+  // czat (panel czlonkow) - w pelnym ekranie playera trzymamy go schowanego
+  if (!twitchEmbedFullscreen) {
+    if (rect.chat) {
+      if (!twitchChatVisible) showTwitchChat(rect.chat);
+      else {
+        lastTwitchChatRect = rect.chat;
+        updateTwitchChatBounds();
+      }
+    } else if (twitchChatVisible) {
+      hideTwitchChat();
     }
-  } else if (twitchChatVisible) {
-    hideTwitchChat();
   }
 });
 
