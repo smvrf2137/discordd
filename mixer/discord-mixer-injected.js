@@ -1060,12 +1060,28 @@
       }
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      if (r.width < 200 || r.height < 150) return null;
+      if (r.width < 200) return null;
+
+      // Dolna krawedz: konczymy ZAWSZE nad paskiem pisania (formularz),
+      // by player nie nachodzil na pole wpisywania.
+      let bottom = r.bottom;
+      const chatMain = document.querySelector("main[class*=\"chatContent\"]");
+      const form = chatMain
+        ? chatMain.querySelector("form[class*=\"form\"]")
+        : document.querySelector("form[class*=\"form\"]");
+      if (form) {
+        const fr = form.getBoundingClientRect();
+        if (fr.top > r.top) {
+          bottom = Math.min(bottom, fr.top - 12);
+        }
+      }
+      const height = bottom - r.top;
+      if (height < 150) return null;
       return {
         x: Math.round(r.left),
         y: Math.round(r.top),
         width: Math.round(r.width),
-        height: Math.round(r.height),
+        height: Math.round(height),
       };
     } catch (e) {
       return null;
