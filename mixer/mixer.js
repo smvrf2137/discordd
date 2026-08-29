@@ -61,6 +61,12 @@ function describeApp(app) {
       label: "SoundCloud",
     };
   }
+  if (app.tag === "twitch") {
+    return {
+      icon: "img:tw",
+      label: "Twitch",
+    };
+  }
   if (app.self) {
     return { icon: "💬", label: "Discord" };
   }
@@ -77,6 +83,7 @@ function paintSlider(slider, percent, color) {
 // Ikony wbudowane (SVG inline, nie wymagaja plikow)
 const ICON_IMAGES = {
   sc: '<svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="5" fill="#ff5500"/><path fill="#fff" d="M3.6 14.9v3.1h.9v-3.1h-.9zm1.9-1.1v4.2h.9V13.8h-.9zm1.9-.7v4.9h.9v-4.9h-.9zm1.9-.4v5.3h.9v-5.3h-.9zm1.9.6v4.7h.9v-4.7h-.9zm2.3-2.5c-.2 0-.4 0-.6.1v4.9h6.6c1.5 0 2.7-1 2.7-2.5 0-1.3-1-2.4-2.3-2.5-.4-1.6-1.9-2.8-3.7-2.8-1.2 0-2.2.5-2.9 1.3.1 0 .2 0 .2.1.1.1.2.2.2.4v2.3c-.4-.2-.7-.3-1.2-.3z"/></svg>',
+  tw: '<svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="5" fill="#9147ff"/><path fill="#fff" d="M6.2 3.5 5 6.6v12.4h3.9V21h2.1l1.9-2h3.1l4.6-4.6V3.5H6.2zm12.3 10.1-2.2 2.2h-3.5l-1.9 1.9v-1.9H7.7V4.9h10.8v8.7zM16 7.6h-1.6v4.4H16V7.6zm-4.4 0H10v4.4h1.6V7.6z"/></svg>',
 };
 
 function makeRow({ icon, name, percent, sliderClass, onCommit, onInput }) {
@@ -169,7 +176,9 @@ function renderApps(apps) {
       const desc = describeApp(app);
       const isVirtual = !!app.virtual;
       const applyVolume = (v) => {
-        if (isVirtual) {
+        if (app.tag === "twitch") {
+          window.electronMixer.setTwitchVolume(v);
+        } else if (isVirtual) {
           window.electronMixer.setSoundcloudVolume(v);
         } else {
           window.electronMixer.setAppVolume(app.pid, v);

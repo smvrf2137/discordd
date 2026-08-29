@@ -27,6 +27,11 @@ let soundcloudVolume = null;
 
 let overlayVisible = false;
 
+// Ostatnia ustawiona glosnosc Twitcha (0..100, null = domyslna 100).
+// Jak SoundCloud: audio idzie wspolna sesja WASAPI, wiec suwak ustawia
+// glosnosc bezposrednio na stronie playera (twitch-preload.js).
+let twitchVolume = null;
+
 // ======== LIVE TWITCH ========
 // Kanal znajomego, ktorego live automatycznie otwieramy.
 const TWITCH_CHANNEL = "vanqubix";
@@ -977,7 +982,8 @@ function createTwitchPlayerView() {
   if (twitchView) return twitchView;
   twitchView = new BrowserView({
     webPreferences: {
-      contextIsolation: true,
+      preload: path.join(__dirname, "twitch-preload.js"),
+      contextIsolation: false,
       nodeIntegration: false,
       autoplayPolicy: "no-user-gesture-required",
     },
@@ -989,6 +995,11 @@ function createTwitchPlayerView() {
   wc.setUserAgent(USER_AGENT);
   wc.loadURL(twitchPlayerUrl());
   twitchLoaded = true;
+  wc.on("dom-ready", () => {
+    try {
+      if (twitchVolume != null) sendTwitchVolume(twitchVolume);
+    } catch (e) {}
+  });
 
   wc.on("did-finish-load", () => {
     // przyciemnij tla playera, by pasowalo do ciemnego okna
@@ -1107,7 +1118,11 @@ function createTwitchEmbedView() {
   if (twitchEmbedView) return twitchEmbedView;
   twitchEmbedView = new BrowserView({
     webPreferences: {
-      contextIsolation: true,
+      // contextIsolation wylaczone, by preload mogl przechwycic zrodla
+      // dzwieku (gain/video) w swiecie strony Twitcha; nodeIntegration
+      // w swiecie strony pozostaje wylaczone.
+      preload: path.join(__dirname, "twitch-preload.js"),
+      contextIsolation: false,
       nodeIntegration: false,
       autoplayPolicy: "no-user-gesture-required",
     },
@@ -1115,6 +1130,11 @@ function createTwitchEmbedView() {
 
   const wc = twitchEmbedView.webContents;
   wc.setUserAgent(USER_AGENT);
+  wc.on("dom-ready", () => {
+    try {
+      if (twitchVolume != null) sendTwitchVolume(twitchVolume);
+    } catch (e) {}
+  });
 
   wc.on("did-finish-load", () => {
     wc.insertCSS("html,body{background:#0e0e10 !important;}").catch(() => {});
@@ -1408,12 +1428,74 @@ function soundcloudVirtualApp() {
   };
 }
 
+// Player Twitcha (osadzony w #transmisja lub osobne okno) to osobny
+// suwak: tak jak SoundCloud audio idzie wspolna sesja WASAPI, wiec
+// glosnosc ustawiamy bezposrednio w widoku playera (twitch-preload.js).
+function twitchVirtualApp() {
+  const vol = twitchVolume == null ? 1 : twitchVolume / 100;
+  return {
+    pid: "__twitch__",
+    name: "twitch",
+    volume: vol,
+    muted: false,
+    self: false,
+    virtual: true,
+    tag: "twitch",
+  };
+}
+
+// Suwaj pokazujemy tylko gdy player faktycznie istnieje (osadzony live
+// albo osobne okno Twitcha).
+function twitchPlayerActive() {
+  try {
+    if (twitchVisible && twitchView && twitchView.webContents && !twitchView.webContents.isDestroyed()) {
+      return true;
+    }
+    if (
+      twitchEmbedVisible &&
+      twitchEmbedView &&
+      twitchEmbedView.webContents &&
+      !twitchEmbedView.webContents.isDestroyed()
+    ) {
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function sendTwitchVolume(pct) {
+  try {
+    const views = [twitchEmbedView && twitchEmbedView.webContents, twitchView && twitchView.webContents];
+    for (const wc of views) {
+      if (wc && !wc.isDestroyed()) {
+        wc.send("twitch-set-volume", pct);
+      }
+    }
+  } catch (e) {}
+}
+
+ipcMain.on("twitch-volume-request", () => {
+  if (twitchVolume != null) sendTwitchVolume(twitchVolume);
+});
+
+ipcMain.on("mixer-set-twitch-volume", (_event, data) => {
+  if (!data || typeof data.percent !== "number") return;
+  twitchVolume = Math.max(0, Math.min(100, Math.round(data.percent)));
+  sendTwitchVolume(twitchVolume);
+  sendAppsToMixer();
+});
+
 function sendAppsToMixer() {
   if (!audioControl) return;
   const sessions = audioControl.sessions.slice();
   try {
     if (soundcloudView && soundcloudView.webContents && !soundcloudView.webContents.isDestroyed()) {
       sessions.push(soundcloudVirtualApp());
+    }
+  } catch (e) {}
+  try {
+    if (twitchPlayerActive()) {
+      sessions.push(twitchVirtualApp());
     }
   } catch (e) {}
   sendToMixer("mixer-apps", sessions);
@@ -1746,7 +1828,9 @@ app.whenReady().then(() => {
   // PID renderera SoundCloud moze byc znany dopiero po starcie widoku -
   // przepnij tagi po kilku sekundach i potem co 15s.
   setTimeout(sendAppsToMixer, 4000);
-  setInterval(sendAppsToMixer, 15000);
+  // czestszy odswiez: suwaki wirtualne (SoundCloud/Twitch) moga sie
+  // pojawic/zniknac bez zadnego zdarzenia sesji audio
+  setInterval(sendAppsToMixer, 2000);
 });
 
 app.on("will-quit", () => {

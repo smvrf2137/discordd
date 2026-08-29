@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld("electronMixer", {
     ipcRenderer.send("mixer-set-soundcloud-volume", { percent });
   },
 
+  setTwitchVolume: (percent) => {
+    ipcRenderer.send("mixer-set-twitch-volume", { percent });
+  },
+
   setUserVolume: (userId, percent) => {
     ipcRenderer.send("mixer-set-user-volume", { userId, percent });
   },
