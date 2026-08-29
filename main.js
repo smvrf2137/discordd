@@ -1570,6 +1570,19 @@ ipcMain.on("twitch-volume-request", () => {
   if (twitchVolume != null) sendTwitchVolume(twitchVolume);
 });
 
+// Pelny ekran zgloszony bezposrednio z playera (twitch-preload.js).
+// BrowserView nie emituje enter/leave-html-full-screen pewnie, wiec
+// polegamy na IPC ze strony (fullscreen API + hook + Esc).
+ipcMain.on("twitch-html-fullscreen", (event, enter) => {
+  try {
+    const fromEmbed =
+      twitchEmbedView && event.sender === twitchEmbedView.webContents;
+    const fromWindow = twitchView && event.sender === twitchView.webContents;
+    if (fromEmbed) onTwitchEmbedFullscreen(enter);
+    else if (fromWindow) onTwitchFullscreen(enter);
+  } catch (e) {}
+});
+
 ipcMain.on("mixer-set-twitch-volume", (_event, data) => {
   if (!data || typeof data.percent !== "number") return;
   twitchVolume = Math.max(0, Math.min(100, Math.round(data.percent)));

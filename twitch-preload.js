@@ -90,6 +90,74 @@ const { ipcRenderer } = require("electron");
     boot();
   }
 
+  // ===== Pelny ekran =====
+  // BrowserView Elektrona nie emituje pewnie enter/leave-html-full-screen,
+  // wiec pelny ekran wykrywamy tez bezposrednio w stronie: zdarzenie
+  // fullscreenchange, hook requestFullscreen/exitFullscreen oraz klawisz Esc.
+  // Main dostaje "twitch-html-fullscreen" i sam rozciaga widok na okno.
+  function reportFullscreen(enter) {
+    try {
+      ipcRenderer.send("twitch-html-fullscreen", !!enter);
+    } catch (e) {}
+  }
+
+  function currentFs() {
+    return !!(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.webkitIsFullScreen
+    );
+  }
+
+  function installFullscreenHook() {
+    try {
+      document.addEventListener("fullscreenchange", () => reportFullscreen(currentFs()));
+      document.addEventListener("webkitfullscreenchange", () =>
+        reportFullscreen(currentFs())
+      );
+
+      // zamiar wejscia/wyjscia - nawet gdy Electron nie zrealizuje pelnego
+      // ekranu BrowserView, my i tak rozciagniemy widok recznie w mainie
+      const hookMethod = (proto, name, enter) => {
+        const orig = proto && proto[name];
+        if (typeof orig !== "function" || orig.__mixerFsHooked) return;
+        const wrapped = function () {
+          reportFullscreen(enter);
+          return orig.apply(this, arguments);
+        };
+        wrapped.__mixerFsHooked = true;
+        try {
+          proto[name] = wrapped;
+        } catch (e) {}
+      };
+      hookMethod(Element.prototype, "requestFullscreen", true);
+      hookMethod(Element.prototype, "webkitRequestFullscreen", true);
+      hookMethod(Element.prototype, "webkitRequestFullScreen", true);
+      if (typeof document.exitFullscreen === "function") {
+        const origExit = document.exitFullscreen.bind(document);
+        document.exitFullscreen = function () {
+          reportFullscreen(false);
+          return origExit();
+        };
+      }
+      hookMethod(document, "webkitExitFullscreen", false);
+      hookMethod(document, "webkitCancelFullScreen", false);
+
+      // Esc na wypadek, gdyby natywny pelny ekran nie byl aktywny
+      window.addEventListener(
+        "keydown",
+        (e) => {
+          if (e.key === "Escape" || e.key === "Esc" || e.keyCode === 27) {
+            reportFullscreen(false);
+          }
+        },
+        true
+      );
+    } catch (e) {}
+  }
+
+  installFullscreenHook();
+
   ipcRenderer.on("twitch-set-volume", (_e, pct) => {
     try {
       setTarget(pct);
