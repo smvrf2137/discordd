@@ -1049,40 +1049,51 @@
     return false;
   }
 
-  function measureChatArea() {
+  // Pelny obszar "kina": live i czat wypelniaja cala prawa strone czatu -
+  // od gornej krawedzi naglowka kanalu (pasek "#nazwa-kanalu") az po sam
+  // dol okna (wlacznie z paskiem pisania). Player = kolumna wiadomosci,
+  // czat = miejsce listy czlonkow (tez siegajace gornego naglowka).
+  function measureTransmisjaAreas() {
     try {
-      // obszar listy wiadomosci
-      const wrap = document.querySelector("div[class*=\"messagesWrapper\"]");
-      let el = wrap;
-      if (!el) {
-        const ol = document.querySelector("ol[data-list-id=\"chat-messages\"]");
-        el = ol && ol.closest("[class*=\"scroller\"]");
-      }
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      if (r.width < 200) return null;
-
-      // Dolna krawedz: konczymy ZAWSZE nad paskiem pisania (formularz),
-      // by player nie nachodzil na pole wpisywania.
-      let bottom = r.bottom;
       const chatMain = document.querySelector("main[class*=\"chatContent\"]");
-      const form = chatMain
-        ? chatMain.querySelector("form[class*=\"form\"]")
-        : document.querySelector("form[class*=\"form\"]");
-      if (form) {
-        const fr = form.getBoundingClientRect();
-        if (fr.top > r.top) {
-          bottom = Math.min(bottom, fr.top - 12);
+      if (!chatMain) return null;
+      const mr = chatMain.getBoundingClientRect();
+      if (mr.width < 200) return null;
+
+      // gora: naglowek kanalu (pasek nad wiadomosciami ORAZ nad lista czlonkow)
+      let topY = mr.top;
+      const header =
+        document.querySelector("section[aria-label=\"Nagłówek kanału\"]") ||
+        document.querySelector("div[class*=\"subtitleContainer\"]");
+      if (header) {
+        const hr = header.getBoundingClientRect();
+        if (hr.top >= 0 && hr.top < topY) topY = hr.top;
+      }
+
+      // player: cala kolumna wiadomosci od naglowka do dolu okna
+      const player = {
+        x: Math.round(mr.left),
+        y: Math.round(topY),
+        width: Math.round(mr.width),
+        height: Math.round(mr.bottom - topY),
+      };
+      if (player.height < 150) return null;
+
+      // czat: szerokosc od listy czlonkow, ale od gornego naglowka do dolu
+      let chat = null;
+      const aside = document.querySelector("aside[class*=\"membersWrap\"]");
+      if (aside) {
+        const ar = aside.getBoundingClientRect();
+        if (ar.width >= 150 && ar.bottom - topY >= 200) {
+          chat = {
+            x: Math.round(ar.left),
+            y: Math.round(topY),
+            width: Math.round(ar.width),
+            height: Math.round(ar.bottom - topY),
+          };
         }
       }
-      const height = bottom - r.top;
-      if (height < 150) return null;
-      return {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(height),
-      };
+      return { player: player, chat: chat };
     } catch (e) {
       return null;
     }
@@ -1112,23 +1123,6 @@
     } catch (e) {}
   }
 
-  function measureMembersArea() {
-    try {
-      const aside = document.querySelector("aside[class*=\"membersWrap\"]");
-      if (!aside) return null;
-      const r = aside.getBoundingClientRect();
-      if (r.width < 150 || r.height < 200) return null;
-      return {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
   let lastTwitchRectSig = "";
   function detectTransmisja() {
     try {
@@ -1143,14 +1137,12 @@
       // panel czlonkow ma byc widoczny (tam wyladuje czat Twitcha)
       setMembersForced(true);
 
-      const player = measureChatArea();
-      if (!player) return;
-      const chat = measureMembersArea();
-      const payload = { player: player, chat: chat };
-      const sig = JSON.stringify(payload);
+      const areas = measureTransmisjaAreas();
+      if (!areas || !areas.player) return;
+      const sig = JSON.stringify(areas);
       if (sig !== lastTwitchRectSig) {
         lastTwitchRectSig = sig;
-        bridge.pushTwitchEmbed(payload);
+        bridge.pushTwitchEmbed(areas);
       }
     } catch (e) {}
   }
