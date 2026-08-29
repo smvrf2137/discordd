@@ -30,6 +30,7 @@ let overlayVisible = false;
 let mixerWindow = null;
 let mixerVisible = false;
 let audioControl = null;
+let tabWindow = null;
 
 // JS wstrzykiwany do Discorda: uzytkownicy kanalu glosowego + ich glosnosc
 const MIXER_DISCORD_JS = fs.readFileSync(
@@ -582,6 +583,7 @@ function createMainWindow() {
     if (mixerVisible) {
       centerMixer();
     }
+    updateTabWindowPosition();
   });
 
   mainWindow.on("resize", () => {
@@ -592,6 +594,7 @@ function createMainWindow() {
     if (mixerVisible) {
       centerMixer();
     }
+    updateTabWindowPosition();
   });
 
   mainWindow.on("maximize", () => {
@@ -601,6 +604,7 @@ function createMainWindow() {
     if (mixerVisible) {
       centerMixer();
     }
+    updateTabWindowPosition();
   });
 
   mainWindow.on("unmaximize", () => {
@@ -610,6 +614,7 @@ function createMainWindow() {
     if (mixerVisible) {
       centerMixer();
     }
+    updateTabWindowPosition();
   });
 
   mainWindow.on("minimize", () => {
@@ -619,6 +624,7 @@ function createMainWindow() {
     if (mixerWindow && mixerVisible) {
       mixerWindow.hide();
     }
+    setTabWindowVisible(false);
   });
 
   mainWindow.on("restore", () => {
@@ -630,6 +636,7 @@ function createMainWindow() {
       centerMixer();
       mixerWindow.show();
     }
+    setTabWindowVisible(!mixerVisible);
   });
 
   mainWindow.on("closed", () => {
@@ -639,8 +646,14 @@ function createMainWindow() {
     if (mixerWindow) {
       mixerWindow.close();
     }
+    if (tabWindow) {
+      tabWindow.close();
+    }
     mainWindow = null;
   });
+
+  // Kafelek miksera
+  createTabWindow();
 }
 
 function updateDiscordBounds() {
@@ -654,6 +667,68 @@ function updateDiscordBounds() {
     width: width,
     height: height - TITLEBAR_HEIGHT,
   });
+}
+
+// ===== Kafelek (tab) miksera - osobne przezroczyste okno przy prawej
+// krawedzi. Nie moze byc elementem strony glownego okna, bo zaslanialby go
+// BrowserView z Discordem; osobne okno unosi sie nad wszystkimi widokami.
+const TAB_WIN_W = 44;
+const TAB_WIN_H = 100;
+
+function updateTabWindowPosition() {
+  if (!mainWindow || !tabWindow) return;
+  const [mainX, mainY] = mainWindow.getPosition();
+  const [, mainHeight] = mainWindow.getSize();
+  // W obszarze pod paskiem tytulowym, wysrodkowany w pionie.
+  const x = mainX - TAB_WIN_W + 40; // czesc wystaje poza krawedz (zaokraglenie)
+  const contentY = mainY + TITLEBAR_HEIGHT;
+  const contentH = mainHeight - TITLEBAR_HEIGHT;
+  const y = Math.round(contentY + (contentH - TAB_WIN_H) / 2);
+  tabWindow.setPosition(Math.round(x), y);
+}
+
+function createTabWindow() {
+  if (tabWindow) return;
+  tabWindow = new BrowserWindow({
+    width: TAB_WIN_W,
+    height: TAB_WIN_H,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: false,
+    hasShadow: false,
+    parent: mainWindow,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  tabWindow.setAlwaysOnTop(true, "pop-up");
+  tabWindow.loadFile(path.join(__dirname, "ui", "mixer-tab.html"));
+  tabWindow.once("ready-to-show", () => {
+    if (mainWindow && mainWindow.isVisible()) {
+      updateTabWindowPosition();
+      tabWindow.showInactive();
+    }
+  });
+  tabWindow.on("closed", () => {
+    tabWindow = null;
+  });
+}
+
+function setTabWindowVisible(visible) {
+  if (!tabWindow) return;
+  if (visible) {
+    updateTabWindowPosition();
+    if (!tabWindow.isVisible()) tabWindow.showInactive();
+  } else {
+    if (tabWindow.isVisible()) tabWindow.hide();
+  }
 }
 
 function updateSoundcloudBounds() {
@@ -948,11 +1023,16 @@ function slideMixerIn() {
 }
 
 function setMixerTabActive(active) {
+  const on = !!active;
+  // podswietlenie kafla (w jego oknie)
   try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("mixer-active", !!active);
+    if (tabWindow && !tabWindow.isDestroyed()) {
+      tabWindow.webContents.send("mixer-active", on);
     }
   } catch (e) {}
+  // gdy mikser otwarty - chowamy kafelek (mikser jest na wierzchu),
+  // po zamknieciu pokazujemy go z powrotem
+  setTabWindowVisible(!on);
 }
 
 function showMixer() {
@@ -1164,8 +1244,8 @@ app.on("will-quit", () => {
 
   if (rpc) {
     try {
-      rpc.clearActivity();
-      rpc.destroy();
+      Promise.resolve(rpc.clearActivity()).catch(() => {});
+      Promise.resolve(rpc.destroy()).catch(() => {});
     } catch (e) {}
   }
 });
