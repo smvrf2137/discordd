@@ -857,7 +857,15 @@ function ourAppHasFocus() {
 
 function syncTabToFocus() {
   if (!tabWindow) return;
-  if (mixerVisible) {
+  // Mikser uwazamy za otwarty gdy flaga mowi tak ALBO okno miksera jest
+  // faktycznie widoczne (po restore okno-potomek moglo wrocic na ekran).
+  let mixerShown = !!mixerVisible;
+  try {
+    if (mixerWindow && !mixerWindow.isDestroyed() && mixerWindow.isVisible()) {
+      mixerShown = true;
+    }
+  } catch (e) {}
+  if (mixerShown) {
     // mikser otwarty - kafelek i tak schowany (jest na nim suwak)
     setTabWindowVisible(false);
     return;
@@ -1518,6 +1526,10 @@ function createMixer() {
       try {
         if (!mixerWindow || mixerWindow.isDestroyed()) return;
         if (!mixerVisible) return;
+        // Gdy okno glowne jest zminimalizowane, blur to efekt minimalizacji,
+        // a nie przejscia do innego programu - NIE zamykamy miksera (i tak
+        // fizycznie wraca on z oknem po restore, co rozjechaloby flagi).
+        if (mainWindow && mainWindow.isMinimized()) return;
         const f = BrowserWindow.getFocusedWindow();
         if (f === mixerWindow) return;
         // focus przeszedl do INNEJ APLIKACJI (zadne z naszych okien nie ma
