@@ -678,9 +678,11 @@ const TAB_WIN_H = 100;
 function updateTabWindowPosition() {
   if (!mainWindow || !tabWindow) return;
   const [mainX, mainY] = mainWindow.getPosition();
-  const [, mainHeight] = mainWindow.getSize();
-  // W obszarze pod paskiem tytulowym, wysrodkowany w pionie.
-  const x = mainX - TAB_WIN_W + 40; // czesc wystaje poza krawedz (zaokraglenie)
+  const [mainWidth, mainHeight] = mainWindow.getSize();
+  // Prawa krawedz: okno kafla ma szer. TAB_WIN_W, a sam kafelek jest w nim
+  // dosuniety do prawej (right:0). Ustawiamy okno tak, by jego prawa krawedz
+  // pokrywala sie z prawa krawedzia okna glownego (+ lekki wystaw zaokraglenia).
+  const x = mainX + mainWidth - TAB_WIN_W + 6;
   const contentY = mainY + TITLEBAR_HEIGHT;
   const contentH = mainHeight - TITLEBAR_HEIGHT;
   const y = Math.round(contentY + (contentH - TAB_WIN_H) / 2);
