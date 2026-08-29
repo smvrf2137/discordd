@@ -691,7 +691,8 @@ function createMainWindow() {
       centerMixer();
       mixerWindow.show();
     }
-    setTimeout(syncTabToFocus, 60);
+    // kafelek pokazujemy dopiero gdy okno faktycznie ma realne wymiary
+    syncTabAfterRestore();
   });
 
   mainWindow.on("closed", () => {
@@ -722,7 +723,7 @@ function createMainWindow() {
   mainWindow.on("show", scheduleTabSync);
   mainWindow.on("hide", () => setTabWindowVisible(false));
   mainWindow.on("minimize", () => setTabWindowVisible(false));
-  mainWindow.on("restore", scheduleTabSync);
+  mainWindow.on("restore", () => syncTabAfterRestore());
 }
 
 function updateDiscordBounds() {
@@ -744,8 +745,25 @@ function updateDiscordBounds() {
 const TAB_WIN_W = 44;
 const TAB_WIN_H = 120;
 
+// Czy okno glowne ma juz realne, widoczne wymiary? Zminimalizowane okno
+// ma w Windowsie sentinel (np. x=-32000) i bezsensowny rozmiar - w tym
+// stanie NIE wolno pozycjonowac kafla, bo wyladowalby "w srodku" ekranu.
+function mainWindowBoundsReady() {
+  try {
+    if (!mainWindow || mainWindow.isMinimized() || !mainWindow.isVisible()) return false;
+    const [x, y] = mainWindow.getPosition();
+    const [w, h] = mainWindow.getSize();
+    if (x < -1000 || y < -1000) return false;
+    if (w < 200 || h < 200) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function updateTabWindowPosition() {
   if (!mainWindow || !tabWindow) return;
+  if (!mainWindowBoundsReady()) return;
   const [mainX, mainY] = mainWindow.getPosition();
   const [mainWidth, mainHeight] = mainWindow.getSize();
   // Prawa krawedz okna kafla zrownana z prawa krawedzia okna glownego;
@@ -795,11 +813,31 @@ function createTabWindow() {
 function setTabWindowVisible(visible) {
   if (!tabWindow) return;
   if (visible) {
+    // nie pokazuj, dopoki okno glowne nie ma realnych wymiarow (restore)
+    if (!mainWindowBoundsReady()) return;
     updateTabWindowPosition();
     if (!tabWindow.isVisible()) tabWindow.showInactive();
   } else {
     if (tabWindow.isVisible()) tabWindow.hide();
   }
+}
+
+// Po restore okno przez chwilke ma jeszcze nieustalone wymiary - ponawiamy
+// synchronizacje kafla, az bounds beda poprawne (wowczas kafelek sie
+// pozycjonuje i pokaze). Wczesniej trzymamy go schowanego.
+let tabRestoreTries = 0;
+function syncTabAfterRestore() {
+  tabRestoreTries = 0;
+  const tick = () => {
+    tabRestoreTries++;
+    if (!tabWindow) return;
+    if (mainWindowBoundsReady()) {
+      syncTabToFocus();
+      return;
+    }
+    if (tabRestoreTries < 30) setTimeout(tick, 100);
+  };
+  setTimeout(tick, 50);
 }
 
 // Kafelek ma sie pokazac TYLKO gdy aktywne jest jedno z naszych okien
