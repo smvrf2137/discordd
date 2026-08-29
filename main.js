@@ -1482,9 +1482,21 @@ function createMixer() {
         if (!mixerVisible) return;
         const f = BrowserWindow.getFocusedWindow();
         if (f === mixerWindow) return;
+        // focus przeszedl do INNEJ APLIKACJI (zadne z naszych okien nie ma
+        // fokusu) - chowamy mikser, ale NIE wyciagamy Discorda na wierzch,
+        // by kafelek nie pojawil sie nad programem uzytkownika.
+        const ours = [mainWindow, twitchWindow, overlayWindow].filter(Boolean);
+        if (!f || ours.indexOf(f) === -1) {
+          hideMixer(false);
+          // na wszelki wypadek po chwili jeszcze raz zweryfikuj, czy
+          // kafelek ma byc ukryty (chowanie okna potomnego moze na moment
+          // oddac fokus do okna glownego)
+          setTimeout(syncTabToFocus, 200);
+          return;
+        }
         hideMixer();
       } catch (e) {
-        hideMixer();
+        hideMixer(false);
       }
     }, 120);
   });
@@ -1708,12 +1720,15 @@ function showMixer() {
   }
 }
 
-function hideMixer() {
+// refocus=true (domyslnie) oddaje fokus do Discorda po zamknieciu miksera.
+// Gdy mikser chowa sie z powodu wyjscia do innego programu, refocus=false:
+// nie kradniemy fokusu, a kafelek dzieki temu nie zostanie pokazany.
+function hideMixer(refocus) {
   if (!mixerWindow) return;
   mixerVisible = false;
   mixerWindow.hide();
   setMixerTabActive(false);
-  if (mainWindow) mainWindow.focus();
+  if (refocus !== false && mainWindow) mainWindow.focus();
 }
 
 function toggleMixer() {
