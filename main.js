@@ -690,7 +690,7 @@ function createMainWindow() {
       centerMixer();
       mixerWindow.show();
     }
-    setTabWindowVisible(!mixerVisible);
+    setTimeout(syncTabToFocus, 60);
   });
 
   mainWindow.on("closed", () => {
@@ -711,6 +711,17 @@ function createMainWindow() {
 
   // Kafelek miksera
   createTabWindow();
+
+  // Pokazuj kafelek tylko gdy nasza aplikacja jest na wierzchu.
+  const scheduleTabSync = () => setTimeout(syncTabToFocus, 60);
+  app.on("browser-window-focus", scheduleTabSync);
+  app.on("browser-window-blur", scheduleTabSync);
+  mainWindow.on("focus", scheduleTabSync);
+  mainWindow.on("blur", scheduleTabSync);
+  mainWindow.on("show", scheduleTabSync);
+  mainWindow.on("hide", () => setTabWindowVisible(false));
+  mainWindow.on("minimize", () => setTabWindowVisible(false));
+  mainWindow.on("restore", scheduleTabSync);
 }
 
 function updateDiscordBounds() {
@@ -788,6 +799,33 @@ function setTabWindowVisible(visible) {
   } else {
     if (tabWindow.isVisible()) tabWindow.hide();
   }
+}
+
+// Kafelek ma sie pokazac TYLKO gdy aktywne jest jedno z naszych okien
+// (glowne, mikser, okno Twitcha, overlay). Gdy uzytkownik przejdzie do
+// innego programu (np. przegladarki), kafelek nie moze "przebijac" sie
+// nad nim - chowamy go. Wykrywamy to po focusie ktoregokolwiek okna app.
+function ourAppHasFocus() {
+  try {
+    const focused = BrowserWindow.getFocusedWindow();
+    if (focused) {
+      if (tabWindow && focused === tabWindow) return false; // kafelek nie jest focusable
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function syncTabToFocus() {
+  if (!tabWindow) return;
+  if (mixerVisible) {
+    // mikser otwarty - kafelek i tak schowany (jest na nim suwak)
+    setTabWindowVisible(false);
+    return;
+  }
+  const visible =
+    ourAppHasFocus() && !!mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized();
+  setTabWindowVisible(visible);
 }
 
 function updateSoundcloudBounds() {
@@ -1581,8 +1619,8 @@ function setMixerTabActive(active) {
     }
   } catch (e) {}
   // gdy mikser otwarty - chowamy kafelek (mikser jest na wierzchu),
-  // po zamknieciu pokazujemy go z powrotem
-  setTabWindowVisible(!on);
+  // po zamknieciu pokazujemy go z powrotem (jesli app ma focus)
+  syncTabToFocus();
 }
 
 function showMixer() {
