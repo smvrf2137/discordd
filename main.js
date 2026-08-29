@@ -804,6 +804,12 @@ function createTabWindow() {
       updateTabWindowPosition();
       tabWindow.showInactive();
     }
+    // przywroc wskaznik live, jesli status jest juz znany
+    try {
+      if (twitchLive === true || twitchLive === false) {
+        tabWindow.webContents.send("twitch-live", twitchLive);
+      }
+    } catch (e) {}
   });
   tabWindow.on("closed", () => {
     tabWindow = null;
@@ -1071,6 +1077,12 @@ function setTwitchLiveIndicator(live) {
   try {
     if (twitchWindow && !twitchWindow.isDestroyed()) {
       twitchWindow.webContents.send("twitch-live", !!live);
+    }
+  } catch (e) {}
+  // kafelek miksera dostaje ten sam status - zapala pulsujacy wskaznik live
+  try {
+    if (tabWindow && !tabWindow.isDestroyed()) {
+      tabWindow.webContents.send("twitch-live", !!live);
     }
   } catch (e) {}
 }
