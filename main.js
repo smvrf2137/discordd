@@ -1,7 +1,7 @@
 const {
   app,
   BrowserWindow,
-  BrowserView,
+  WebContentsView,
   globalShortcut,
   ipcMain,
   nativeTheme,
@@ -578,7 +578,7 @@ function createMainWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "ui", "index.html"));
 
-  discordView = new BrowserView({
+  discordView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, "discord-preload.js"),
       contextIsolation: true,
@@ -586,7 +586,7 @@ function createMainWindow() {
     },
   });
 
-  mainWindow.addBrowserView(discordView);
+  mainWindow.contentView.addChildView(discordView);
   updateDiscordBounds();
 
   // Discord zezwala na wspoldzielenie ekranu tylko dla Chrome/Edge/aplikacji;
@@ -871,7 +871,7 @@ function createOverlay() {
   // przez SoundClouda - inaczej suwak glosnosci nie dziala (CSP blokuje
   // inline script, executeJavaScript dziala w odizolowanym swiecie).
   // nodeIntegration pozostaje wylaczone (strona nie dostaje Node).
-  soundcloudView = new BrowserView({
+  soundcloudView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, "soundcloud-preload.js"),
       contextIsolation: false,
@@ -879,7 +879,7 @@ function createOverlay() {
     },
   });
 
-  overlayWindow.addBrowserView(soundcloudView);
+  overlayWindow.contentView.addChildView(soundcloudView);
   updateSoundcloudBounds();
 
   const wc = soundcloudView.webContents;
@@ -1031,7 +1031,7 @@ function setTwitchLiveIndicator(live) {
 
 function createTwitchPlayerView() {
   if (twitchView) return twitchView;
-  twitchView = new BrowserView({
+  twitchView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, "twitch-preload.js"),
       contextIsolation: false,
@@ -1039,7 +1039,7 @@ function createTwitchPlayerView() {
       autoplayPolicy: "no-user-gesture-required",
     },
   });
-  twitchWindow.addBrowserView(twitchView);
+  twitchWindow.contentView.addChildView(twitchView);
   updateTwitchBounds();
 
   const wc = twitchView.webContents;
@@ -1203,7 +1203,7 @@ function onTwitchEmbedFullscreen(enter) {
 
 function createTwitchEmbedView() {
   if (twitchEmbedView) return twitchEmbedView;
-  twitchEmbedView = new BrowserView({
+  twitchEmbedView = new WebContentsView({
     webPreferences: {
       // contextIsolation wylaczone, by preload mogl przechwycic zrodla
       // dzwieku (gain/video) w swiecie strony Twitcha; nodeIntegration
@@ -1253,8 +1253,8 @@ function showTwitchEmbed() {
   createTwitchEmbedView();
   try {
     // widok mogl byc zdjety z okna przy wyjsciu z kanalu (hideTwitchEmbed)
-    if (!mainWindow.getBrowserViews().includes(twitchEmbedView)) {
-      mainWindow.addBrowserView(twitchEmbedView);
+    if (!mainWindow.contentView.children.includes(twitchEmbedView)) {
+      mainWindow.contentView.addChildView(twitchEmbedView);
     }
     const url = twitchPlayerUrl();
     if (twitchEmbedView.webContents.getURL() !== url) {
@@ -1276,7 +1276,7 @@ function hideTwitchEmbed(blank) {
     if (blank !== false) {
       twitchEmbedView.webContents.loadURL("about:blank");
     }
-    mainWindow.removeBrowserView(twitchEmbedView);
+    mainWindow.contentView.removeChildView(twitchEmbedView);
   } catch (e) {}
 }
 
@@ -1316,7 +1316,7 @@ function updateTwitchChatBounds() {
 
 function createTwitchChatView() {
   if (twitchChatView) return twitchChatView;
-  twitchChatView = new BrowserView({
+  twitchChatView = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1352,8 +1352,8 @@ function showTwitchChat(rect) {
   lastTwitchChatRect = rect;
   createTwitchChatView();
   try {
-    if (!mainWindow.getBrowserViews().includes(twitchChatView)) {
-      mainWindow.addBrowserView(twitchChatView);
+    if (!mainWindow.contentView.children.includes(twitchChatView)) {
+      mainWindow.contentView.addChildView(twitchChatView);
     }
     const url = twitchChatUrl();
     if (twitchChatView.webContents.getURL() !== url) {
@@ -1371,7 +1371,7 @@ function hideTwitchChat() {
   if (!twitchChatView) return;
   try {
     twitchChatView.webContents.loadURL("about:blank");
-    mainWindow.removeBrowserView(twitchChatView);
+    mainWindow.contentView.removeChildView(twitchChatView);
   } catch (e) {}
 }
 
