@@ -748,6 +748,7 @@ function createMainWindow() {
     if (mixerWindow && mixerVisible) {
       mixerWindow.hide();
     }
+    if (twSettingsWindow) closeTwitchSettings();
     setTabWindowVisible(false);
   });
 
@@ -2094,6 +2095,19 @@ function openTwitchSettings(channelId, channelName) {
     });
     twSettingsWindow.setAlwaysOnTop(true, "pop-up");
     twSettingsWindow.loadFile(path.join(__dirname, "twitch", "channel-settings.html"));
+    // Utrata fokusu (klik w Discorda, w inna aplikacje) zamyka okno, by nie
+    // wisialo nad wszystkimi. Krotnia zwloka pozwala kliknac w przyciski.
+    twSettingsWindow.on("blur", () => {
+      setTimeout(() => {
+        try {
+          if (!twSettingsWindow || twSettingsWindow.isDestroyed()) return;
+          if (BrowserWindow.getFocusedWindow() === twSettingsWindow) return;
+          closeTwitchSettings();
+        } catch (e) {
+          closeTwitchSettings();
+        }
+      }, 140);
+    });
     twSettingsWindow.on("closed", () => {
       twSettingsWindow = null;
       twSettingsChannel = null;
@@ -2145,16 +2159,27 @@ ipcMain.on("twitch-settings-open", (event, data) => {
   } catch (e) {}
 });
 
+// Po zapisie/odlaczeniu wymus kilka pomiarow (renderer moze zaktualizowac
+// mape i przeliczyc kanal z opoznieniem; bez tego osadzenie nie chwytalo
+// nowo przypietego loginu).
+function refreshTwitchEmbedAfterMapChange() {
+  try {
+    if (discordView) discordView.webContents.send("twitch-channel-map", twitchChannelMap);
+  } catch (e) {}
+  lastTwitchEmbedRect = null;
+  requestTwitchEmbedMeasure();
+  setTimeout(requestTwitchEmbedMeasure, 300);
+  setTimeout(requestTwitchEmbedMeasure, 1000);
+}
+
 ipcMain.on("twitch-settings-save", (event, data) => {
   try {
-    if (!twSettingsChannel || !twSettingsChannel.id) return;
+    if (!twSettingsChannel || !twSettingsChannel.id) { closeTwitchSettings(); return; }
     const login = normalizeTwitchLogin((data && data.login) || "");
-    if (!login) return;
-    twitchChannelMap[twitchChannel.id] = login;
+    if (!login) { closeTwitchSettings(); return; }
+    twitchChannelMap[twSettingsChannel.id] = login;
     saveTwitchMap();
-    if (discordView) discordView.webContents.send("twitch-channel-map", twitchChannelMap);
-    lastTwitchEmbedRect = null;
-    requestTwitchEmbedMeasure();
+    refreshTwitchEmbedAfterMapChange();
   } catch (e) {}
   closeTwitchSettings();
 });
@@ -2165,9 +2190,7 @@ ipcMain.on("twitch-settings-unbind", () => {
       // pusty wpis = jawne wylaczenie live na tym kanale
       twitchChannelMap[twSettingsChannel.id] = "";
       saveTwitchMap();
-      if (discordView) discordView.webContents.send("twitch-channel-map", twitchChannelMap);
-      lastTwitchEmbedRect = null;
-      requestTwitchEmbedMeasure();
+      refreshTwitchEmbedAfterMapChange();
     }
   } catch (e) {}
   closeTwitchSettings();
