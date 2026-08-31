@@ -2060,12 +2060,9 @@ ipcMain.on("twitch-channel-set", (event, data) => {
     const id = data && data.channelId ? String(data.channelId) : null;
     if (!id) return;
     const login = normalizeTwitchLogin(data.login || "");
-    if (!login) {
-      // pusty = usun przypisanie
-      delete twitchChannelMap[id];
-    } else {
-      twitchChannelMap[id] = login;
-    }
+    // login "" = jawne WYLACZENIE live na tym kanale (nadpisuje tez domyslny
+    // kanal "transmisja"); nieusuwanie wpisu wazne, by nie wrocilo fallbackiem.
+    twitchChannelMap[id] = login;
     saveTwitchMap();
     event.reply("twitch-channel-map", twitchChannelMap);
     // wymus ponowny pomiar, by osadzenie przeladowalo login

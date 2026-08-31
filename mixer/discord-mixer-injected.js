@@ -1307,6 +1307,7 @@
       lastTwitchRectSig = "";
       detectTransmisja();
       setChannelLiveTile();
+      ensureSettingsButton();
     });
   }
   if (bridge.requestTwitchChannelMap) bridge.requestTwitchChannelMap();
@@ -1327,8 +1328,16 @@
 #__twCfgSave:hover{background:#a06cff;}
 #__twCfgClear{background:transparent;color:#f23f43;}
 #__twCfgCancel{background:#4e5058;color:#dbdee1;}
-.__twCfgBtn{background:transparent;border:none;color:#b5bac1;cursor:pointer;display:inline-flex;align-items:center;padding:4px;border-radius:4px;}
-.__twCfgBtn:hover{color:#fff;background:rgba(255,255,255,.08);}
+/* przycisk na gornym pasku okna (styl ikon Discorda) */
+.__twTopWrap{display:inline-flex;align-items:center;justify-content:center;margin:0 2px;}
+.__twTopBtn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;color:#b5bac1;cursor:pointer;}
+.__twTopBtn:hover{color:#fff;background:rgba(255,255,255,.08);}
+.__twTopBtn svg{width:18px;height:18px;}
+/* aktywny = biezacy kanal ma podpiety live */
+.__twTopBtn.__twActive{color:#a06cff;}
+.__twTopBtn.__twActive:hover{color:#b993ff;}
+.__twTopBtn.__twActive::after{content:"";position:absolute;width:7px;height:7px;border-radius:50%;background:#e0162a;margin-left:20px;margin-top:-18px;box-shadow:0 0 0 2px #1e1f22;animation:twTopDot 1.4s ease-in-out infinite;}
+@keyframes twTopDot{0%,100%{opacity:1;}50%{opacity:.35;}}
 `;
 
   function ensureSettingsStyle() {
@@ -1343,31 +1352,63 @@
     } catch (e) {}
   }
 
-  function toolbar() {
-    const sec = document.querySelector('section[aria-label="Nagłówek kanału"]');
-    if (!sec) return null;
-    return (
-      sec.querySelector('[class*="toolbar"]') ||
-      sec.querySelector('div[class*="children"]')
-    );
+  // Gorny pasek okna: kontener prawej grupy ikon (skrzynka odbiorcza, pomoc).
+  // Przycisk ustawien live dokladamy wlasnie tam, by byl dostepny na kazdym
+  // kanale (dziala na biezacy kanal tekstowy).
+  function topBarTrailing() {
+    try {
+      const bar =
+        document.querySelector('div[data-window-chrome="true"] [class*="trailing"]') ||
+        document.querySelector('[class*="bar_"][data-window-chrome="true"] [class*="trailing"]');
+      if (bar) return bar;
+      // fallback: po ikonie "Pomoc" / "Skrzynka odbiorcza"
+      const help = document.querySelector('[aria-label="Pomoc"]');
+      if (help) {
+        const wrap = help.closest('[class*="trailing"]') || help.parentElement;
+        return wrap;
+      }
+    } catch (e) {}
+    return null;
   }
 
   function ensureSettingsButton() {
     try {
-      const tb = toolbar();
-      if (!tb) return;
-      if (tb.querySelector("#__twCfgBtn")) return;
-      const btn = document.createElement("button");
-      btn.id = "__twCfgBtn";
-      btn.className = "__twCfgBtn";
-      btn.title = "Ustaw stream Twitch dla tego kanału";
-      btn.innerHTML =
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M4 3l-1 2v13h4v3l3-3h5l5-5V3H4zm14 9l-3 3H9l-3 3v-3H5V5h13v7z"/><circle cx="10" cy="10" r="1.4"/><circle cx="14" cy="10" r="1.4"/></svg>';
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openSettingsModal();
-      });
-      tb.appendChild(btn);
+      const trailing = topBarTrailing();
+      if (!trailing) return;
+      let wrap = trailing.querySelector("#__twCfgWrap");
+      if (!wrap) {
+        wrap = document.createElement("div");
+        wrap.id = "__twCfgWrap";
+        wrap.className = "__twTopWrap";
+        wrap.innerHTML =
+          '<div id="__twTopBtn" class="clickable__81391 __twTopBtn" role="button" tabindex="0" aria-label="Stream Twitch dla kanału">' +
+          '<svg aria-hidden="true" role="img" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M4 3l-1 2v13h4v3l3-3h5l5-5V3H4zm14 9l-3 3H9l-3 3v-3H5V5h13v7z"/><circle cx="10" cy="10" r="1.4"/><circle cx="14" cy="10" r="1.4"/></svg>' +
+          "</div>";
+        const btn = wrap.querySelector("#__twTopBtn");
+        const open = (e) => {
+          if (e) { e.stopPropagation(); }
+          openSettingsModal();
+        };
+        btn.addEventListener("click", open);
+        btn.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e); }
+        });
+        // wstaw jako pierwszy element prawej grupy (przed skrzynka)
+        trailing.insertBefore(wrap, trailing.firstChild);
+      }
+      // aktualizuj stan aktywny (biezacy kanal ma podpiety live?)
+      const btn = wrap.querySelector("#__twTopBtn");
+      if (btn) {
+        const info = currentChannelInfo();
+        const hasBinding = !!(info && (
+          (info.id && Object.prototype.hasOwnProperty.call(twitchChannelMap, String(info.id)) && twitchChannelMap[String(info.id)]) ||
+          (!info.id || !Object.prototype.hasOwnProperty.call(twitchChannelMap, String(info.id))) && String(info.name || "").toLowerCase().indexOf("transmisja") !== -1
+        ));
+        btn.classList.toggle("__twActive", !!hasBinding && !!loginForChannel(info));
+        btn.title = loginForChannel(info)
+          ? "Live: " + loginForChannel(info) + " — kliknij, aby zmienić/odłączyć"
+          : "Przypnij live Twitch do tego kanału";
+      }
     } catch (e) {}
   }
 
@@ -1384,6 +1425,8 @@
       ensureSettingsStyle();
       const info = currentChannelInfo();
       const cur = info.id ? twitchChannelMap[String(info.id)] || "" : "";
+      const activeLogin = loginForChannel(info);
+      const canUnbind = !!activeLogin; // odlaczamy tylko, gdy live jest podpiety
 
       const modal = document.createElement("div");
       modal.id = "__twCfgModal";
@@ -1392,11 +1435,15 @@
         "<h3>Stream Twitch dla kanału</h3>" +
         "<p>Kanał: <b style=\"color:#fff\">" +
         String(info.name || "(bieżący)").replace(/</g, "&lt;") +
-        "</b>. Wpisz login streamera, którego live ma się tu wyświetlać.</p>" +
+        "</b>" +
+        (activeLogin
+          ? ". Aktualnie live: <b style=\"color:#a06cff\">" + String(activeLogin).replace(/</g, "&lt;") + "</b>."
+          : ". Wpisz login streamera, którego live ma się tu wyświetlać.") +
+        "</p>" +
         "<label>Login kanału na Twitchu</label>" +
-        '<input id="__twCfgInput" spellcheck="false" placeholder="np. vanqubix" />' +
+        '<input id="__twCfgInput" spellcheck="false" placeholder="np. vanqubix lub https://twitch.tv/vanqubix" />' +
         '<div id="__twCfgRow">' +
-        '<button id="__twCfgClear">Usuń</button>' +
+        (canUnbind ? '<button id="__twCfgClear">Odłącz live</button>' : "") +
         '<span style="flex:1"></span>' +
         '<button id="__twCfgCancel">Anuluj</button>' +
         '<button id="__twCfgSave">Zapisz</button>' +
