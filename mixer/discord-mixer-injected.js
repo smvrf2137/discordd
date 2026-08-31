@@ -1035,16 +1035,69 @@
   // Gdy uzytkownik jest na kanale tekstowym o nazwie zawierajacej "transmisja",
   // mierzymy obszar listy wiadomosci (nad polem pisania) i wysylamy jego
   // wspolrzedne do maina, by nakladac na niego player Twitcha.
+  // Mapa kanal Discorda -> login Twitcha (z maina, do odczytu w rendererze).
+  let twitchChannelMap = {};
+
+  // Id i nazwa BIEZACEGO kanalu tekstowego. Id z linku kanalu
+  // (data-list-item-id="channels___<id>" / href="/channels/<guild>/<channel>").
+  function currentChannelInfo() {
+    try {
+      let id = null;
+      let name = "";
+      // zaznaczony watek na liscie kanalow
+      const sel = document.querySelector(
+        '[aria-current="page"][data-list-item-id^="channels___"], ' +
+          'a[aria-current="page"][href*="/channels/"]'
+      );
+      if (sel) {
+        const dli = sel.getAttribute("data-list-item-id") || "";
+        const m = dli.match(/channels___(\d+)/);
+        if (m) id = m[1];
+        if (!id) {
+          const hm = (sel.getAttribute("href") || "").match(/\/channels\/\d+\/(\d+)/);
+          if (hm) id = hm[1];
+        }
+        const al = sel.getAttribute("aria-label") || "";
+        const cm = al.match(/^\s*(.*?)\s*\(kanał tekstowy\)/i) || al.match(/^(.*?)\s*\(/);
+        name = cm ? cm[1] : sel.textContent || "";
+      }
+      // fallback: tytul kanalu w naglowku
+      if (!name) {
+        const h1 = document.querySelector(
+          "section[aria-label=\"Nagłówek kanału\"] h1, h1[class*=\"title__\"]"
+        );
+        if (h1) name = h1.textContent || "";
+      }
+      // fallback id z URL-a
+      if (!id) {
+        const um = (location.hash || location.pathname || "").match(/\/channels\/\d+\/(\d+)/);
+        if (um) id = um[1];
+      }
+      return { id: id, name: name.trim() };
+    } catch (e) {
+      return { id: null, name: "" };
+    }
+  }
+
+  // Analogiczna logika jak w mainie: mapa ma pierwszenstwo, potem nazwa
+  // zawierajaca "transmisja" (domyslny streamer), inaczej brak.
+  function loginForChannel(info) {
+    try {
+      const id = info && info.id ? String(info.id) : null;
+      if (id && Object.prototype.hasOwnProperty.call(twitchChannelMap, id)) {
+        const l = twitchChannelMap[id];
+        return l ? String(l) : null;
+      }
+      const nm = String((info && info.name) || "").toLowerCase();
+      if (nm.indexOf("transmisja") !== -1) return "vanqubix";
+    } catch (e) {}
+    return null;
+  }
+
+  // Czy na biezacym kanale ma byc osadzony live? (jest przypisany streamer)
   function isTransmisjaChannel() {
     try {
-      const main = document.querySelector("main[class*=\"chatContent\"]");
-      if (main) {
-        const lbl = (main.getAttribute("aria-label") || "").toLowerCase();
-        if (lbl.indexOf("transmisja") !== -1) return true;
-      }
-      // fallback: naglowek kanalu (h1 tytulu; klasy haszowane -> prefiks)
-      const h1 = document.querySelector("section[aria-label=\"Nagłówek kanału\"] h1, h1[class*=\"title__\"]");
-      if (h1 && (h1.textContent || "").toLowerCase().indexOf("transmisja") !== -1) return true;
+      return loginForChannel(currentChannelInfo()) !== null;
     } catch (e) {}
     return false;
   }
@@ -1124,13 +1177,22 @@
   }
 
   let lastTwitchRectSig = "";
+  let lastChannelKey = "";
   function detectTransmisja() {
     try {
+      const info = currentChannelInfo();
+      const key = String(info.id || info.name || "");
+      if (key !== lastChannelKey) {
+        lastChannelKey = key;
+        lastTwitchRectSig = ""; // zmiana kanalu = wymus nowy pomiar
+        setChannelLiveTile();
+      }
+
       if (!isTransmisjaChannel()) {
         setMembersForced(false);
         if (lastTwitchRectSig !== "none") {
           lastTwitchRectSig = "none";
-          bridge.pushTwitchEmbed(null);
+          bridge.pushTwitchEmbed({ channelId: info.id, channelName: info.name, player: null });
         }
         return;
       }
@@ -1139,10 +1201,16 @@
 
       const areas = measureTransmisjaAreas();
       if (!areas || !areas.player) return;
-      const sig = JSON.stringify(areas);
+      const payload = {
+        channelId: info.id,
+        channelName: info.name,
+        player: areas.player,
+        chat: areas.chat,
+      };
+      const sig = JSON.stringify(payload);
       if (sig !== lastTwitchRectSig) {
         lastTwitchRectSig = sig;
-        bridge.pushTwitchEmbed(areas);
+        bridge.pushTwitchEmbed(payload);
       }
     } catch (e) {}
   }
@@ -1196,50 +1264,177 @@
     } catch (e) {}
   }
 
-  function transmisjaChannelItem() {
+  // Znajduje wiersz kanalu na liscie (lewy pasek) po jego ID.
+  function channelItemById(id) {
+    if (!id) return null;
     try {
-      const items = document.querySelectorAll(
-        '[data-list-item-id^="channels___"], li[data-dnd-name], li[class*="containerDefault"]'
+      return (
+        document.querySelector('[data-list-item-id="channels___' + id + '"]') ||
+        document.querySelector('a[href*="/channels/' + id + '"]')
       );
-      for (const li of items) {
-        let name = li.getAttribute("data-dnd-name") || "";
-        if (!name) {
-          const a = li.querySelector('a[aria-label]');
-          if (a) name = a.getAttribute("aria-label") || "";
-        }
-        if (name.toLowerCase().indexOf("transmisja") !== -1) return li;
-      }
     } catch (e) {}
     return null;
   }
 
   let twLiveOn = false;
-  function setTransmisjaLive(live) {
+  // Oznacza kafl BIEZACEGO kanalu (jesli jest live). Klasa __twLive daje anim.
+  function setChannelLiveTile() {
     try {
-      twLiveOn = !!live;
-      if (!twLiveOn) {
-        document.querySelectorAll(".__twLive").forEach((el) => el.classList.remove("__twLive"));
-        return;
+      document.querySelectorAll(".__twLive").forEach((el) => el.classList.remove("__twLive"));
+      if (!twLiveOn) return;
+      const info = currentChannelInfo();
+      if (!loginForChannel(info)) return; // biezacy kanal nie ma streamera
+      let li = channelItemById(info.id);
+      if (li) {
+        li = li.closest("li") || li;
+        ensureChannelLiveStyle();
+        if (!li.classList.contains("__twLive")) li.classList.add("__twLive");
       }
-      ensureChannelLiveStyle();
-      const li = transmisjaChannelItem();
-      if (li && !li.classList.contains("__twLive")) li.classList.add("__twLive");
     } catch (e) {}
   }
 
   if (bridge.onTwitchLive) {
     bridge.onTwitchLive((live) => {
-      setTransmisjaLive(live);
+      twLiveOn = !!live;
+      setChannelLiveTile();
     });
   }
-  // popros o biezacy stan (po zaladowaniu strony / odswiezeniu Discorda)
-  try {
-    if (bridge.requestTwitchLive) bridge.requestTwitchLive();
-  } catch (e) {}
 
-  // React przerenderowuje liste kanalow - gdy live, ponawiaj oznaczenie kafla
+  // mapa kanal->login z maina
+  if (bridge.onTwitchChannelMap) {
+    bridge.onTwitchChannelMap((map) => {
+      twitchChannelMap = map || {};
+      lastTwitchRectSig = "";
+      detectTransmisja();
+      setChannelLiveTile();
+    });
+  }
+  if (bridge.requestTwitchChannelMap) bridge.requestTwitchChannelMap();
+  if (bridge.requestTwitchLive) bridge.requestTwitchLive();
+
+  // ===== Przycisk ustawien streamu w naglowku kanalu + okno =====
+  const SETTINGS_CSS = `
+#__twCfgModal{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);}
+#__twCfgCard{width:380px;max-width:90vw;background:#313338;border-radius:10px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.6);color:#dbdee1;font:15px/1.45 'gg sans',sans-serif;}
+#__twCfgCard h3{margin:0 0 4px;font-size:17px;color:#fff;}
+#__twCfgCard p{margin:0 0 14px;color:#b5bac1;font-size:13px;}
+#__twCfgCard label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;color:#b5bac1;margin-bottom:6px;}
+#__twCfgInput{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:6px;border:1px solid #1e1f22;background:#1e1f22;color:#fff;font-size:15px;outline:none;}
+#__twCfgInput:focus{border-color:#9147ff;}
+#__twCfgRow{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
+#__twCfgCard button{padding:9px 16px;border-radius:6px;border:none;font-size:14px;font-weight:600;cursor:pointer;}
+#__twCfgSave{background:#9147ff;color:#fff;}
+#__twCfgSave:hover{background:#a06cff;}
+#__twCfgClear{background:transparent;color:#f23f43;}
+#__twCfgCancel{background:#4e5058;color:#dbdee1;}
+.__twCfgBtn{background:transparent;border:none;color:#b5bac1;cursor:pointer;display:inline-flex;align-items:center;padding:4px;border-radius:4px;}
+.__twCfgBtn:hover{color:#fff;background:rgba(255,255,255,.08);}
+`;
+
+  function ensureSettingsStyle() {
+    try {
+      let s = document.getElementById("__twCfgStyle");
+      if (!s) {
+        s = document.createElement("style");
+        s.id = "__twCfgStyle";
+        (document.head || document.documentElement).appendChild(s);
+      }
+      s.textContent = SETTINGS_CSS;
+    } catch (e) {}
+  }
+
+  function toolbar() {
+    const sec = document.querySelector('section[aria-label="Nagłówek kanału"]');
+    if (!sec) return null;
+    return (
+      sec.querySelector('[class*="toolbar"]') ||
+      sec.querySelector('div[class*="children"]')
+    );
+  }
+
+  function ensureSettingsButton() {
+    try {
+      const tb = toolbar();
+      if (!tb) return;
+      if (tb.querySelector("#__twCfgBtn")) return;
+      const btn = document.createElement("button");
+      btn.id = "__twCfgBtn";
+      btn.className = "__twCfgBtn";
+      btn.title = "Ustaw stream Twitch dla tego kanału";
+      btn.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M4 3l-1 2v13h4v3l3-3h5l5-5V3H4zm14 9l-3 3H9l-3 3v-3H5V5h13v7z"/><circle cx="10" cy="10" r="1.4"/><circle cx="14" cy="10" r="1.4"/></svg>';
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openSettingsModal();
+      });
+      tb.appendChild(btn);
+    } catch (e) {}
+  }
+
+  function closeSettingsModal() {
+    try {
+      const m = document.getElementById("__twCfgModal");
+      if (m) m.remove();
+    } catch (e) {}
+  }
+
+  function openSettingsModal() {
+    try {
+      closeSettingsModal();
+      ensureSettingsStyle();
+      const info = currentChannelInfo();
+      const cur = info.id ? twitchChannelMap[String(info.id)] || "" : "";
+
+      const modal = document.createElement("div");
+      modal.id = "__twCfgModal";
+      modal.innerHTML =
+        '<div id="__twCfgCard">' +
+        "<h3>Stream Twitch dla kanału</h3>" +
+        "<p>Kanał: <b style=\"color:#fff\">" +
+        String(info.name || "(bieżący)").replace(/</g, "&lt;") +
+        "</b>. Wpisz login streamera, którego live ma się tu wyświetlać.</p>" +
+        "<label>Login kanału na Twitchu</label>" +
+        '<input id="__twCfgInput" spellcheck="false" placeholder="np. vanqubix" />' +
+        '<div id="__twCfgRow">' +
+        '<button id="__twCfgClear">Usuń</button>' +
+        '<span style="flex:1"></span>' +
+        '<button id="__twCfgCancel">Anuluj</button>' +
+        '<button id="__twCfgSave">Zapisz</button>' +
+        "</div></div>";
+      document.body.appendChild(modal);
+
+      const input = modal.querySelector("#__twCfgInput");
+      input.value = cur || "";
+      setTimeout(() => input.focus(), 30);
+
+      const save = () => {
+        if (bridge.setTwitchChannel && info.id) {
+          bridge.setTwitchChannel(String(info.id), input.value.trim());
+        }
+        closeSettingsModal();
+      };
+      modal.querySelector("#__twCfgSave").addEventListener("click", save);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") save();
+        if (e.key === "Escape") closeSettingsModal();
+      });
+      modal.querySelector("#__twCfgCancel").addEventListener("click", closeSettingsModal);
+      modal.querySelector("#__twCfgClear").addEventListener("click", () => {
+        if (bridge.setTwitchChannel && info.id) {
+          bridge.setTwitchChannel(String(info.id), "");
+        }
+        closeSettingsModal();
+      });
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) closeSettingsModal();
+      });
+    } catch (e) {}
+  }
+
+  // React przerysowuje naglowek/liscie - ponawiaj oznaczenia i przycisk
   setInterval(() => {
-    if (twLiveOn) setTransmisjaLive(true);
+    ensureSettingsButton();
+    if (twLiveOn) setChannelLiveTile();
   }, 1500);
 
 

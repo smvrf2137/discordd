@@ -33,8 +33,79 @@ let overlayVisible = false;
 let twitchVolume = null;
 
 // ======== LIVE TWITCH ========
-// Kanal znajomego, ktorego live automatycznie otwieramy.
+// Domyślny streamer (stare zachowanie dla kanalu o nazwie "transmisja"
+// oraz dla osobnego okna Twitcha otwieranego przyciskiem).
 const TWITCH_CHANNEL = "vanqubix";
+
+// Mapowanie: identyfikator kanalu tekstowego Discorda -> login Twitcha.
+// Konfigurowane w Discordzie (przycisk w naglowku kanalu), zapisywane na dysku.
+let twitchChannelMap = {};
+let currentDiscordChannel = null; // {id, name} kanalu tekstowego, na ktorym jestesmy
+
+function twitchMapFile() {
+  try {
+    const dir = app.getPath("userData");
+    return path.join(dir, "twitch-channels.json");
+  } catch (e) {
+    return path.join(__dirname, "twitch-channels.json");
+  }
+}
+
+function loadTwitchMap() {
+  try {
+    const f = twitchMapFile();
+    if (fs.existsSync(f)) {
+      const raw = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (raw && typeof raw === "object") {
+        twitchChannelMap = raw.map && typeof raw.map === "object" ? raw.map : raw;
+      }
+    }
+  } catch (e) {}
+}
+
+function saveTwitchMap() {
+  try {
+    fs.writeFileSync(
+      twitchMapFile(),
+      JSON.stringify({ map: twitchChannelMap }, null, 2),
+      "utf8"
+    );
+  } catch (e) {}
+}
+
+// Normalizuje login Twitcha (male litery, bez www.twitch.tv itp.).
+function normalizeTwitchLogin(s) {
+  let t = String(s || "").trim().toLowerCase();
+  t = t.replace(/^https?:\/\/(www\.)?twitch\.tv\//i, "");
+  t = t.split(/[?#/]/)[0];
+  t = t.replace(/[^a-z0-9_]/g, "");
+  return t;
+}
+
+// Login Twitcha dla danego kanalu tekstowego Discorda.
+// 1) jesli kanal jest w mapie - bierzemy go (pusty string = wylaczony)
+// 2) nazwa kanalu zawiera "transmisja" -> domyslny TWITCH_CHANNEL
+// 3) inaczej brak (null)
+function twitchLoginForChannel(channelId, channelName) {
+  const id = channelId ? String(channelId) : null;
+  if (id && Object.prototype.hasOwnProperty.call(twitchChannelMap, id)) {
+    const login = twitchChannelMap[id];
+    return login ? String(login) : null;
+  }
+  const nm = String(channelName || "").toLowerCase();
+  if (nm.indexOf("transmisja") !== -1) return TWITCH_CHANNEL;
+  return null;
+}
+
+// Login dla aktualnie otwartego kanalu (lub domyslny dla okna/glownej listy).
+function activeTwitchLogin() {
+  if (currentDiscordChannel) {
+    const l = twitchLoginForChannel(currentDiscordChannel.id, currentDiscordChannel.name);
+    if (l) return l;
+  }
+  return TWITCH_CHANNEL;
+}
+
 let twitchWindow = null;
 let twitchView = null;
 let twitchVisible = false;
@@ -49,6 +120,8 @@ let twitchEmbedVisible = false;
 let twitchEmbedFullscreen = false; // player w trybie pelnego ekranu
 let lastTwitchEmbedRect = null;
 
+// Login streamera aktualnie zaladowanego w osadzonych widokach (player/czat).
+let twitchEmbedLogin = null;
 // Czat Twitcha osadzony w miejscu panelu czlonkow (prawa strona czatu).
 let twitchChatView = null;
 let twitchChatVisible = false;
@@ -1016,12 +1089,12 @@ function toggleOverlay() {
 // ======== LIVE TWITCH ========
 const TWITCH_HEADER_HEIGHT = 55;
 
-function twitchPlayerUrl() {
+function twitchPlayerUrl(login) {
+  const channel = login || activeTwitchLogin();
   // Popout player (dziala tez jako samodzielna strona). parent=twitch.tv
-  // pasuje do tego URL-a. Glosnosc startowa 1.0 (suwakiem SoundCloud-klon?
-  // na razie player ma swoj suwak).
+  // pasuje do tego URL-a.
   const params = new URLSearchParams({
-    channel: TWITCH_CHANNEL,
+    channel: channel,
     enableExtensions: "true",
     muted: "false",
     parent: "twitch.tv",
@@ -1284,7 +1357,7 @@ function createTwitchEmbedView() {
     try {
       const url = String(validatedURL || "");
       if (url.indexOf("player.twitch.tv") !== -1) {
-        wc.loadURL("https://www.twitch.tv/" + TWITCH_CHANNEL);
+        wc.loadURL("https://www.twitch.tv/" + (twitchEmbedLogin || activeTwitchLogin()));
       }
     } catch (e) {}
   });
@@ -1308,7 +1381,7 @@ function showTwitchEmbed() {
     if (!mainWindow.contentView.children.includes(twitchEmbedView)) {
       mainWindow.contentView.addChildView(twitchEmbedView);
     }
-    const url = twitchPlayerUrl();
+    const url = twitchPlayerUrl(twitchEmbedLogin || undefined);
     if (twitchEmbedView.webContents.getURL() !== url) {
       twitchEmbedView.webContents.loadURL(url);
     }
@@ -1335,7 +1408,7 @@ function hideTwitchEmbed(blank) {
 function reloadTwitchEmbedPlayer() {
   if (!twitchEmbedView || !twitchEmbedVisible) return;
   try {
-    twitchEmbedView.webContents.loadURL(twitchPlayerUrl());
+    twitchEmbedView.webContents.loadURL(twitchPlayerUrl(twitchEmbedLogin || undefined));
   } catch (e) {}
 }
 
@@ -1348,9 +1421,10 @@ function requestTwitchEmbedMeasure() {
 }
 
 // ======== CZAT TWITCHA W PANELU CZLONKOW ========
-function twitchChatUrl() {
+function twitchChatUrl(login) {
+  const channel = login || activeTwitchLogin();
   // Popout czatu kanalu (dziala samodzielnie, bez logowania, tylko do czytania).
-  return "https://www.twitch.tv/popout/" + TWITCH_CHANNEL + "/chat?darkpopout";
+  return "https://www.twitch.tv/popout/" + channel + "/chat?darkpopout";
 }
 
 function updateTwitchChatBounds() {
@@ -1407,7 +1481,7 @@ function showTwitchChat(rect) {
     if (!mainWindow.contentView.children.includes(twitchChatView)) {
       mainWindow.contentView.addChildView(twitchChatView);
     }
-    const url = twitchChatUrl();
+    const url = twitchChatUrl(twitchEmbedLogin || undefined);
     if (twitchChatView.webContents.getURL() !== url) {
       twitchChatView.webContents.loadURL(url);
     }
@@ -1430,7 +1504,8 @@ function hideTwitchChat() {
 // Odpytywanie statusu live bez klucza API:
 // 1) publiczny GraphQL Twitcha (dziala z przegladarkowym Client-ID),
 // 2) fallback: obraz podgladu live_user_<kanal> (404 = offline).
-async function checkTwitchLive() {
+async function checkTwitchLive(login) {
+  const channel = login || TWITCH_CHANNEL;
   try {
     const res = await fetch("https://gql.twitch.tv/gql", {
       method: "POST",
@@ -1442,7 +1517,7 @@ async function checkTwitchLive() {
         {
           query:
             'query{user(login:"' +
-            TWITCH_CHANNEL +
+            channel +
             '"){login stream{id title type}}}',
         },
       ]),
@@ -1461,7 +1536,7 @@ async function checkTwitchLive() {
   try {
     const url =
       "https://static-cdn.jtvnw.net/previews-ttv/live_user_" +
-      TWITCH_CHANNEL +
+      channel +
       "-160x90.jpg?t=" +
       Date.now();
     const head = await fetch(url, { method: "HEAD", cache: "no-store" });
@@ -1471,7 +1546,11 @@ async function checkTwitchLive() {
 }
 
 function twitchPollTick() {
-  checkTwitchLive()
+  // Sprawdzamy aktualnie istotny kanal: osadzony player (przypisany kanal)
+  // albo domyslny dla osobnego okna / glownej listy.
+  const login =
+    twitchEmbedVisible && twitchEmbedLogin ? twitchEmbedLogin : TWITCH_CHANNEL;
+  checkTwitchLive(login)
     .then((live) => {
       if (live === null) return; // blad sieci - nic nie zmieniamy
       const wasLive = twitchLive === true;
@@ -1905,21 +1984,44 @@ ipcMain.on("twitch-embed-rect", (event, rect) => {
   if (mainWindow && mainWindow.isDestroyed && mainWindow.isDestroyed()) return;
 
   if (!rect || typeof rect !== "object") {
+    currentDiscordChannel = null;
     if (twitchEmbedVisible) hideTwitchEmbed();
     if (twitchChatVisible) hideTwitchChat();
     return;
   }
+
+  // biezacy kanal tekstowy + login streamera (mapa lub domyslny)
+  currentDiscordChannel = {
+    id: rect.channelId ? String(rect.channelId) : null,
+    name: String(rect.channelName || ""),
+  };
+  const login = twitchLoginForChannel(currentDiscordChannel.id, currentDiscordChannel.name);
+
+  if (!login) {
+    // kanal bez przypisanego streamera i bez "transmisja" w nazwie
+    if (twitchEmbedVisible) hideTwitchEmbed();
+    if (twitchChatVisible) hideTwitchChat();
+    return;
+  }
+
   if (twitchVisible) {
     // osobne okno Twitcha otwarte - nie dublujemy playera ani czatu
     if (twitchChatVisible) hideTwitchChat();
     return;
   }
 
+  // zmiana streamera (przelaczenie kanalu) - przeladuj widoki
+  const loginChanged = twitchEmbedLogin !== login;
+  twitchEmbedLogin = login;
+
   // player
   if (rect.player) {
     lastTwitchEmbedRect = rect.player;
     if (!twitchEmbedVisible) showTwitchEmbed();
-    else updateTwitchEmbedBounds();
+    else {
+      if (loginChanged) reloadTwitchEmbedPlayer();
+      updateTwitchEmbedBounds();
+    }
   } else if (twitchEmbedVisible) {
     hideTwitchEmbed();
   }
@@ -1929,6 +2031,12 @@ ipcMain.on("twitch-embed-rect", (event, rect) => {
     if (rect.chat) {
       if (!twitchChatVisible) showTwitchChat(rect.chat);
       else {
+        if (loginChanged) {
+          // przeladuj czat na nowy kanal
+          try {
+            twitchChatView.webContents.loadURL(twitchChatUrl(twitchEmbedLogin || undefined));
+          } catch (e) {}
+        }
         lastTwitchChatRect = rect.chat;
         updateTwitchChatBounds();
       }
@@ -1936,6 +2044,34 @@ ipcMain.on("twitch-embed-rect", (event, rect) => {
       hideTwitchChat();
     }
   }
+});
+
+// ===== Konfiguracja mapy kanal Discorda -> login Twitcha (UI w Discordzie) =====
+ipcMain.on("twitch-channel-map-request", (event) => {
+  if (!discordView || event.sender !== discordView.webContents) return;
+  try {
+    event.reply("twitch-channel-map", twitchChannelMap);
+  } catch (e) {}
+});
+
+ipcMain.on("twitch-channel-set", (event, data) => {
+  if (!discordView || event.sender !== discordView.webContents) return;
+  try {
+    const id = data && data.channelId ? String(data.channelId) : null;
+    if (!id) return;
+    const login = normalizeTwitchLogin(data.login || "");
+    if (!login) {
+      // pusty = usun przypisanie
+      delete twitchChannelMap[id];
+    } else {
+      twitchChannelMap[id] = login;
+    }
+    saveTwitchMap();
+    event.reply("twitch-channel-map", twitchChannelMap);
+    // wymus ponowny pomiar, by osadzenie przeladowalo login
+    lastTwitchEmbedRect = null;
+    requestTwitchEmbedMeasure();
+  } catch (e) {}
 });
 
 function setupScreenCapture() {
@@ -1993,6 +2129,7 @@ function setupScreenCapture() {
 
 app.whenReady().then(() => {
   initDiscordRPC();
+  loadTwitchMap();
   setupScreenCapture();
   createMainWindow();
   createOverlay();

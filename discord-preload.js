@@ -75,6 +75,31 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     } catch (e) {}
   },
 
+  // strona -> main: pobierz mape kanal Discorda -> login Twitcha
+  requestTwitchChannelMap: () => {
+    try {
+      ipcRenderer.send("twitch-channel-map-request");
+    } catch (e) {}
+  },
+
+  // main -> strona: aktualna mapa
+  onTwitchChannelMap: (cb) => {
+    const handler = (_e, map) => {
+      try {
+        cb(map || {});
+      } catch (e) {}
+    };
+    ipcRenderer.on("twitch-channel-map", handler);
+    return () => ipcRenderer.removeListener("twitch-channel-map", handler);
+  },
+
+  // strona -> main: ustaw/usun przypisanie kanalu do loginu Twitcha
+  setTwitchChannel: (channelId, login) => {
+    try {
+      ipcRenderer.send("twitch-channel-set", { channelId, login });
+    } catch (e) {}
+  },
+
   // main -> strona: zmierz ponownie obszar czatu (resize okna itp.)
   onTwitchEmbedMeasure: (fn) => {
     try {
