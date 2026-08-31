@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stream Twitch dla kanału</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #313338; color: #dbdee1;
+      font-family: "gg sans", "Segoe UI", sans-serif;
+      overflow: hidden; user-select: none;
+      -webkit-app-region: drag;
+    }
+    .card { padding: 20px; display: flex; flex-direction: column; height: 100%; }
+    h3 { margin: 0 0 6px; font-size: 17px; color: #fff; -webkit-app-region: drag; }
+    p.sub { margin: 0 0 16px; color: #b5bac1; font-size: 13px; line-height: 1.5; }
+    p.sub b { color: #fff; }
+    p.sub .login { color: #a06cff; }
+    label { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; color: #b5bac1; margin-bottom: 6px; }
+    .field { -webkit-app-region: no-drag; }
+    input {
+      width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #1e1f22;
+      background: #1e1f22; color: #fff; font-size: 15px; outline: none;
+    }
+    input:focus { border-color: #9147ff; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: auto; padding-top: 18px;
+      -webkit-app-region: no-drag; }
+    button {
+      padding: 9px 16px; border-radius: 6px; border: none; font-size: 14px;
+      font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    #save { background: #9147ff; color: #fff; }
+    #save:hover { background: #a06cff; }
+    #unbind { background: transparent; color: #f23f43; }
+    #unbind:hover { text-decoration: underline; }
+    .spacer { flex: 1; }
+    #cancel { background: #4e5058; color: #dbdee1; }
+    #cancel:hover { background: #5a5c66; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h3>Stream Twitch dla kanału</h3>
+    <p class="sub">
+      Kanał: <b id="ch-name">(…)</b><span id="ch-live-part">. Wpisz login streamera, którego live ma się tu wyświetlać.</span>
+    </p>
+    <label>Login kanału na Twitchu</label>
+    <div class="field">
+      <input id="input" spellcheck="false" placeholder="np. vanqubix lub https://twitch.tv/vanqubix" />
+    </div>
+    <div class="row">
+      <button id="unbind" class="hidden">Odłącz live</button>
+      <span class="spacer"></span>
+      <button id="cancel">Anuluj</button>
+      <button id="save">Zapisz</button>
+    </div>
+  </div>
+
+  <script>
+    const input = document.getElementById("input");
+    const unbindBtn = document.getElementById("unbind");
+    const nameEl = document.getElementById("ch-name");
+    const livePart = document.getElementById("ch-live-part");
+    let channelId = null;
+
+    window.twSettings.onData((d) => {
+      channelId = d.channelId || null;
+      nameEl.textContent = d.channelName || "(bieżący)";
+      input.value = d.login || "";
+      if (d.activeLogin) {
+        livePart.innerHTML = ". Aktualnie live: <b class='login'>" + d.activeLogin + "</b>.";
+        unbindBtn.classList.remove("hidden");
+      } else {
+        livePart.textContent = ". Wpisz login streamera, którego live ma się tu wyświetlać.";
+        unbindBtn.classList.add("hidden");
+      }
+    });
+
+    document.getElementById("save").addEventListener("click", () => {
+      const v = input.value.trim();
+      if (v) window.twSettings.save(v);
+      else window.twSettings.cancel();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const v = input.value.trim();
+        if (v) window.twSettings.save(v);
+      }
+      if (e.key === "Escape") window.twSettings.cancel();
+    });
+    unbindBtn.addEventListener("click", () => window.twSettings.unbind());
+    document.getElementById("cancel").addEventListener("click", () => window.twSettings.cancel());
+  </script>
+</body>
+</html>

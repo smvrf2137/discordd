@@ -2054,21 +2054,127 @@ ipcMain.on("twitch-channel-map-request", (event) => {
   } catch (e) {}
 });
 
-ipcMain.on("twitch-channel-set", (event, data) => {
+// ===== Natywne okno ustawien (musi byc NAD nakladkowymi widokami playera) =====
+let twSettingsWindow = null;
+let twSettingsChannel = null; // {id, name} kanalu, dla ktorego otwarto okno
+
+function closeTwitchSettings() {
+  try {
+    if (twSettingsWindow && !twSettingsWindow.isDestroyed()) {
+      twSettingsWindow.close();
+    }
+  } catch (e) {}
+  twSettingsWindow = null;
+  twSettingsChannel = null;
+}
+
+function openTwitchSettings(channelId, channelName) {
+  const id = channelId ? String(channelId) : null;
+  twSettingsChannel = { id: id, name: String(channelName || "") };
+
+  if (!twSettingsWindow || twSettingsWindow.isDestroyed()) {
+    twSettingsWindow = new BrowserWindow({
+      width: 420,
+      height: 300,
+      frame: false,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      skipTaskbar: true,
+      parent: mainWindow,
+      modal: false,
+      show: false,
+      backgroundColor: "#313338",
+      alwaysOnTop: true,
+      webPreferences: {
+        preload: path.join(__dirname, "twitch", "channel-settings-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    twSettingsWindow.setAlwaysOnTop(true, "pop-up");
+    twSettingsWindow.loadFile(path.join(__dirname, "twitch", "channel-settings.html"));
+    twSettingsWindow.on("closed", () => {
+      twSettingsWindow = null;
+      twSettingsChannel = null;
+    });
+    twSettingsWindow.webContents.on("did-finish-load", () => pushTwitchSettingsData());
+  }
+
+  // wysrodkuj nad oknem glownym i pokaz
+  try {
+    if (mainWindow) {
+      const [mx, my] = mainWindow.getPosition();
+      const [mw, mh] = mainWindow.getSize();
+      const [sw, sh] = twSettingsWindow.getSize();
+      twSettingsWindow.setPosition(
+        Math.round(mx + (mw - sw) / 2),
+        Math.round(my + (mh - sh) / 2)
+      );
+    }
+    pushTwitchSettingsData();
+    twSettingsWindow.show();
+    twSettingsWindow.focus();
+  } catch (e) {}
+}
+
+function pushTwitchSettingsData() {
+  try {
+    if (!twSettingsWindow || twSettingsWindow.isDestroyed() || !twSettingsChannel) return;
+    const { id, name } = twSettingsChannel;
+    const activeLogin = id ? twitchLoginForChannel(id, name) : null;
+    const cur = id && Object.prototype.hasOwnProperty.call(twitchChannelMap, id)
+      ? twitchChannelMap[id]
+      : "";
+    twSettingsWindow.webContents.send("twitch-settings-data", {
+      channelId: id,
+      channelName: name,
+      login: cur || "",
+      activeLogin: activeLogin || "",
+    });
+  } catch (e) {}
+}
+
+// Strona Discorda prosi o otwarcie okna ustawien dla biezacego kanalu.
+ipcMain.on("twitch-settings-open", (event, data) => {
   if (!discordView || event.sender !== discordView.webContents) return;
   try {
     const id = data && data.channelId ? String(data.channelId) : null;
     if (!id) return;
-    const login = normalizeTwitchLogin(data.login || "");
-    // login "" = jawne WYLACZENIE live na tym kanale (nadpisuje tez domyslny
-    // kanal "transmisja"); nieusuwanie wpisu wazne, by nie wrocilo fallbackiem.
-    twitchChannelMap[id] = login;
+    openTwitchSettings(id, (data && data.channelName) || "");
+  } catch (e) {}
+});
+
+ipcMain.on("twitch-settings-save", (event, data) => {
+  try {
+    if (!twSettingsChannel || !twSettingsChannel.id) return;
+    const login = normalizeTwitchLogin((data && data.login) || "");
+    if (!login) return;
+    twitchChannelMap[twitchChannel.id] = login;
     saveTwitchMap();
-    event.reply("twitch-channel-map", twitchChannelMap);
-    // wymus ponowny pomiar, by osadzenie przeladowalo login
+    if (discordView) discordView.webContents.send("twitch-channel-map", twitchChannelMap);
     lastTwitchEmbedRect = null;
     requestTwitchEmbedMeasure();
   } catch (e) {}
+  closeTwitchSettings();
+});
+
+ipcMain.on("twitch-settings-unbind", () => {
+  try {
+    if (twSettingsChannel && twSettingsChannel.id) {
+      // pusty wpis = jawne wylaczenie live na tym kanale
+      twitchChannelMap[twSettingsChannel.id] = "";
+      saveTwitchMap();
+      if (discordView) discordView.webContents.send("twitch-channel-map", twitchChannelMap);
+      lastTwitchEmbedRect = null;
+      requestTwitchEmbedMeasure();
+    }
+  } catch (e) {}
+  closeTwitchSettings();
+});
+
+ipcMain.on("twitch-settings-close", () => {
+  closeTwitchSettings();
 });
 
 function setupScreenCapture() {

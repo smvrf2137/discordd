@@ -93,10 +93,10 @@ contextBridge.exposeInMainWorld("electronMixerBridge", {
     return () => ipcRenderer.removeListener("twitch-channel-map", handler);
   },
 
-  // strona -> main: ustaw/usun przypisanie kanalu do loginu Twitcha
-  setTwitchChannel: (channelId, login) => {
+  // strona -> main: otworz natywne okno ustawien dla kanalu
+  openTwitchSettings: (channelId, channelName) => {
     try {
-      ipcRenderer.send("twitch-channel-set", { channelId, login });
+      ipcRenderer.send("twitch-settings-open", { channelId, channelName });
     } catch (e) {}
   },
 
