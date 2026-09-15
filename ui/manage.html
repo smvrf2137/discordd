@@ -85,24 +85,6 @@
       min-width: 0;
     }
 
-    .closebtn {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      border: none;
-      background: transparent;
-      color: #b5bac1;
-      font-size: 20px;
-      line-height: 1;
-      cursor: pointer;
-      -webkit-app-region: no-drag;
-    }
-
-    .closebtn:hover {
-      background: #da373c;
-      color: #fff;
-    }
-
     .content {
       flex: 1;
       min-height: 0;
@@ -206,9 +188,6 @@
         <button id="fwd" class="navbtn" type="button" title="Do przodu">&#8594;</button>
       </div>
       <div class="title" id="title">Zarzadzanie serwerem</div>
-      <div class="nav">
-        <button id="close" class="closebtn" type="button" title="Zamknij (Esc)">&times;</button>
-      </div>
     </div>
     <div id="content" class="content"></div>
   </div>
@@ -324,9 +303,7 @@
 
       backBtn.addEventListener("click", back);
       fwdBtn.addEventListener("click", forward);
-      document.getElementById("close").addEventListener("click", function () {
-        if (api.closeManage) api.closeManage();
-      });
+      // (zamkniecie: klik poza oknem - patrz blur w procesie glownym - lub Esc)
 
       document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") {

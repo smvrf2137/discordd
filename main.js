@@ -1987,6 +1987,33 @@ function createManageWindow() {
     setManageTabActive(false);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
   });
+
+  // Klikniecie poza panelem (utrata fokusu) chowa go - jak mikser. Zwloka
+  // 120ms rozroznia przejscie fokusu do innego NASZEGO okna od klikniecia
+  // w tlo; przy out-focusie do innego programu NIE przywracamy fokusu
+  // Discorda, by nie wyskakiwac uzytkownikowi nad aktywna aplikacja.
+  manageWindow.on("blur", () => {
+    if (!manageVisible) return;
+    setTimeout(() => {
+      try {
+        if (!manageWindow || manageWindow.isDestroyed() || !manageVisible) return;
+        // minimalizacja glownego okna to nie klikniecie w tlo - nie chowamy
+        // (i tak hook "minimize" chowa panel, a "restore" przywraca)
+        if (mainWindow && mainWindow.isMinimized()) return;
+        const f = BrowserWindow.getFocusedWindow();
+        if (f === manageWindow) return; // fokus wrocil do panelu
+        const ours = [mainWindow, twitchWindow, overlayWindow, mixerWindow].filter(Boolean);
+        if (!f || ours.indexOf(f) === -1) {
+          hideManage(false);
+          setTimeout(syncTabToFocus, 200);
+          return;
+        }
+        hideManage();
+      } catch (e) {
+        hideManage(false);
+      }
+    }, 120);
+  });
 }
 
 function showManage() {
@@ -2002,12 +2029,17 @@ function showManage() {
   setManageTabActive(true);
 }
 
-function hideManage() {
+// refocus=true (domyslnie) oddaje fokus Discordowi po zamknieciu panelu.
+// Gdy panel chowa sie z powodu wyjscia do innego programu (blur), dzwonimy
+// hideManage(false) - nie kradniemy fokusu i nie wyciagamy Discorda.
+function hideManage(refocus) {
   if (!manageWindow || manageWindow.isDestroyed()) return;
   manageVisible = false;
   manageWindow.hide();
   setManageTabActive(false);
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
+  if (refocus !== false && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus();
+  }
 }
 
 function toggleManage() {
