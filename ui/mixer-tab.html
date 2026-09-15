@@ -15,14 +15,22 @@
       user-select: none;
     }
 
-    /* Kafelek przy prawej krawedzi (prawa strona dosunieta do krawedzi okna).
-       W spoczynku waski - tylko ikona; po najechaniu rozszerza sie w LEWO
-       i pokazuje etykiete (bez wysuwania poza krawedz). */
-    .mixer-tab {
+    /* Stos kafelkow przy prawej krawedzi okna Discorda. Kazdy kafelek w
+       spoczynku waski (tylko ikona); po najechaniu rozszerza sie w LEWO
+       (prawa krawedz dosunieta do krawedzi okna, wiec nie wysuwa sie poza
+       nie). */
+    .tabs-stack {
       position: fixed;
       top: 50%;
       right: 2px;
       transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .mixer-tab {
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -46,6 +54,10 @@
       background: #6b76f3;
     }
 
+    .mixer-tab.active {
+      background: #4752c4;
+    }
+
     .mixer-tab-icon {
       font-size: 16px;
       line-height: 1;
@@ -66,16 +78,22 @@
 
     .mixer-tab:hover .mixer-tab-label,
     .mixer-tab.active .mixer-tab-label {
-      max-height: 70px;
+      max-height: 84px;
       opacity: 0.92;
     }
   </style>
 </head>
 <body>
-  <button id="mixer-tab" class="mixer-tab" title="Mikser głośności">
-    <span class="mixer-tab-icon">🔊</span>
-    <span class="mixer-tab-label">Mikser</span>
-  </button>
+  <div class="tabs-stack">
+    <button id="mixer-tab" class="mixer-tab" title="Mikser głośności">
+      <span class="mixer-tab-icon">🔊</span>
+      <span class="mixer-tab-label">Mikser</span>
+    </button>
+    <button id="manage-tab" class="mixer-tab" title="Zarządzanie serwerem">
+      <span class="mixer-tab-icon">🛠️</span>
+      <span class="mixer-tab-label">Panel</span>
+    </button>
+  </div>
 
   <script>
     const tab = document.getElementById("mixer-tab");
@@ -88,6 +106,19 @@
       window.electronAPI.onMixerActive((active) => {
         if (active) tab.classList.add("active");
         else tab.classList.remove("active");
+      });
+    }
+
+    const manageTab = document.getElementById("manage-tab");
+    manageTab.addEventListener("click", () => {
+      if (window.electronAPI && window.electronAPI.toggleManage) {
+        window.electronAPI.toggleManage();
+      }
+    });
+    if (window.electronAPI && window.electronAPI.onManageActive) {
+      window.electronAPI.onManageActive((active) => {
+        if (active) manageTab.classList.add("active");
+        else manageTab.classList.remove("active");
       });
     }
   </script>

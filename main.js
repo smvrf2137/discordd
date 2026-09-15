@@ -72,6 +72,35 @@ function saveTwitchMap() {
     );
   } catch (e) {}
 }
+// Stan panelu zarządzania (ostatnia karta) trzymamy w userData.
+function managePanelFile() {
+  try {
+    const dir = app.getPath("userData");
+    return path.join(dir, "manage-panel.json");
+  } catch (e) {
+    return path.join(__dirname, "manage-panel.json");
+  }
+}
+
+function loadManageState() {
+  try {
+    const f = managePanelFile();
+    if (fs.existsSync(f)) {
+      const raw = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (raw && typeof raw.page === "string" && raw.page) manageLastPage = raw.page;
+    }
+  } catch (e) {}
+}
+
+function saveManageState() {
+  try {
+    fs.writeFileSync(
+      managePanelFile(),
+      JSON.stringify({ page: manageLastPage }, null, 2),
+      "utf8"
+    );
+  } catch (e) {}
+}
 
 // Normalizuje login Twitcha (male litery, bez www.twitch.tv itp.).
 function normalizeTwitchLogin(s) {
@@ -131,6 +160,12 @@ let mixerWindow = null;
 let mixerVisible = false;
 let audioControl = null;
 let tabWindow = null;
+
+// ======== PANEL ZARZADZANIA SERWEREM (okno + kafelek jak mikser) ========
+let manageWindow = null;
+let manageVisible = false;
+// Ostatnio otwarta karta panelu - zapamietywana miedzy uruchomieniami
+let manageLastPage = "home";
 
 // JS wstrzykiwany do Discorda: uzytkownicy kanalu glosowego + ich glosnosc
 const MIXER_DISCORD_JS = fs.readFileSync(
@@ -748,6 +783,9 @@ function createMainWindow() {
     if (mixerWindow && mixerVisible) {
       mixerWindow.hide();
     }
+    if (manageWindow && manageVisible) {
+      manageWindow.hide();
+    }
     if (twSettingsWindow) closeTwitchSettings();
     setTabWindowVisible(false);
   });
@@ -764,6 +802,8 @@ function createMainWindow() {
     if (mixerWindow && mixerVisible) {
       centerMixer();
       mixerWindow.show();
+    }    if (manageWindow && manageVisible) {
+      manageWindow.show();
     }
     // kafelek pokazujemy dopiero gdy okno faktycznie ma realne wymiary
     syncTabAfterRestore();
@@ -779,7 +819,9 @@ function createMainWindow() {
     if (mixerWindow) {
       mixerWindow.close();
     }
-    if (tabWindow) {
+    if (manageWindow) {
+      manageWindow.close();
+    }    if (tabWindow) {
       tabWindow.close();
     }
     mainWindow = null;
@@ -817,7 +859,7 @@ function updateDiscordBounds() {
 // krawedzi. Nie moze byc elementem strony glownego okna, bo zaslanialby go
 // BrowserView z Discordem; osobne okno unosi sie nad wszystkimi widokami.
 const TAB_WIN_W = 44;
-const TAB_WIN_H = 120;
+const TAB_WIN_H = 250;
 
 // Czy okno glowne ma juz realne, widoczne wymiary? Zminimalizowane okno
 // ma w Windowsie sentinel (np. x=-32000) i bezsensowny rozmiar - w tym
@@ -1883,6 +1925,95 @@ function toggleMixer() {
     showMixer();
   }
 }
+// ======== PANEL ZARZADZANIA - okno =========
+function setManageTabActive(active) {
+  try {
+    if (tabWindow && !tabWindow.isDestroyed()) {
+      tabWindow.webContents.send("manage-active", !!active);
+    }
+  } catch (e) {}
+}
+
+// Srodek okna Discorda (ponizej paska tytulowego).
+function centerManage() {
+  if (!mainWindow || !manageWindow) return;
+  if (!mainWindowBoundsReady()) return;
+  const [mainX, mainY] = mainWindow.getPosition();
+  const [mainWidth, mainHeight] = mainWindow.getSize();
+  const [w, h] = manageWindow.getSize();
+  const contentY = mainY + TITLEBAR_HEIGHT;
+  const contentH = mainHeight - TITLEBAR_HEIGHT;
+  let x = Math.round(mainX + (mainWidth - w) / 2);
+  let y = Math.round(contentY + (contentH - h) / 2);
+  if (y < mainY + 6) y = mainY + 6;
+  manageWindow.setPosition(Math.max(0, x), Math.max(0, y));
+}
+
+function createManageWindow() {
+  if (manageWindow) return;
+  manageWindow = new BrowserWindow({
+    width: 860,
+    height: 560,
+    minWidth: 560,
+    minHeight: 400,
+    frame: false,
+    resizable: true,
+    show: false,
+    parent: mainWindow,
+    modal: false,
+    skipTaskbar: true,
+    backgroundColor: "#1e1f22",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  manageWindow.loadFile(path.join(__dirname, "ui", "manage.html"));
+
+  // Przy starcie okna wskaz ostatnia zapamietana karte.
+  manageWindow.webContents.on("did-finish-load", () => {
+    try {
+      if (manageWindow && !manageWindow.isDestroyed()) {
+        manageWindow.webContents.send("manage-state", { page: manageLastPage });
+      }
+    } catch (e) {}
+  });
+
+  manageWindow.on("closed", () => {
+    manageWindow = null;
+    manageVisible = false;
+    setManageTabActive(false);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
+  });
+}
+
+function showManage() {
+  if (!manageWindow || manageWindow.isDestroyed()) createManageWindow();
+  manageVisible = true;
+  centerManage();
+  manageWindow.show();
+  manageWindow.focus();
+  // przy ponownym pokazaniu odswiez zapamietana karte
+  try {
+    manageWindow.webContents.send("manage-state", { page: manageLastPage });
+  } catch (e) {}
+  setManageTabActive(true);
+}
+
+function hideManage() {
+  if (!manageWindow || manageWindow.isDestroyed()) return;
+  manageVisible = false;
+  manageWindow.hide();
+  setManageTabActive(false);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
+}
+
+function toggleManage() {
+  if (manageVisible) hideManage();
+  else showManage();
+}
 
 // IPC
 ipcMain.on("toggle-overlay", () => {
@@ -1926,6 +2057,22 @@ ipcMain.on("toggle-mixer", () => {
 
 ipcMain.on("close-mixer", () => {
   hideMixer();
+});
+// IPC panelu zarządzania
+ipcMain.on("toggle-manage", () => {
+  toggleManage();
+});
+
+ipcMain.on("close-manage", () => {
+  hideManage();
+});
+
+// Zmiana karty panelu - zapamietaj, by przy nastepnym otwarciu wrócic tam.
+ipcMain.on("manage-page", (_event, page) => {
+  const p = String(page || "").trim().slice(0, 40);
+  if (!p || p === manageLastPage) return;
+  manageLastPage = p;
+  saveManageState();
 });
 
 ipcMain.on("mixer-get-state", () => {
@@ -2256,6 +2403,7 @@ function setupScreenCapture() {
 app.whenReady().then(() => {
   initDiscordRPC();
   loadTwitchMap();
+  loadManageState();
   setupScreenCapture();
   createMainWindow();
   createOverlay();

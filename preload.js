@@ -41,6 +41,39 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("mixer-active", handler);
   },
 
+  // Panel zarządzania serwerem (okno + kafelek)
+  toggleManage: () => {
+    ipcRenderer.send("toggle-manage");
+  },
+
+  closeManage: () => {
+    ipcRenderer.send("close-manage");
+  },
+
+  onManageActive: (cb) => {
+    const handler = (_e, active) => {
+      try {
+        cb(active);
+      } catch (e) {}
+    };
+    ipcRenderer.on("manage-active", handler);
+    return () => ipcRenderer.removeListener("manage-active", handler);
+  },
+
+  setManagePage: (page) => {
+    ipcRenderer.send("manage-page", String(page || ""));
+  },
+
+  onManageState: (cb) => {
+    const handler = (_e, state) => {
+      try {
+        cb(state);
+      } catch (e) {}
+    };
+    ipcRenderer.on("manage-state", handler);
+    return () => ipcRenderer.removeListener("manage-state", handler);
+  },
+
   minimize: () => {
     ipcRenderer.send("window-minimize");
   },

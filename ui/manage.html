@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zarządzanie serwerem</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #1e1f22;
+      color: #dbdee1;
+      font-family: "gg sans", "Segoe UI", Tahoma, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .window {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      box-sizing: border-box;
+      border: 1px solid #111214;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    /* Pasek gorny: strzalki do zmiany karty po lewej (jak na szkicu) */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #2b2d31;
+      border-bottom: 1px solid #111214;
+      -webkit-app-region: drag;
+      flex: none;
+    }
+
+    .nav {
+      display: flex;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+
+    .navbtn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: none;
+      background: #3a3c42;
+      color: #dbdee1;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s ease, opacity 0.12s ease;
+    }
+
+    .navbtn:hover:not(:disabled) {
+      background: #484b52;
+      color: #fff;
+    }
+
+    .navbtn:disabled {
+      opacity: 0.32;
+      cursor: default;
+    }
+
+    .title {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: #b5bac1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    .closebtn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: #b5bac1;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+
+    .closebtn:hover {
+      background: #da373c;
+      color: #fff;
+    }
+
+    .content {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    /* Ekran startowy: siatka kart (duze obrazki-przyciski) */
+    .grid {
+      display: flex;
+      gap: 28px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+    }
+
+    .card {
+      width: 264px;
+      height: 196px;
+      border-radius: 26px;
+      background: linear-gradient(160deg, #2b2d31 0%, #232428 100%);
+      border: 2px solid #3f4147;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      cursor: pointer;
+      box-sizing: border-box;
+      transition: transform 0.15s ease, border-color 0.15s ease,
+        box-shadow 0.15s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: #5865f2;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+    }
+
+    .card .emoji {
+      font-size: 46px;
+      line-height: 1;
+    }
+
+    .card .label {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-align: center;
+      color: #dbdee1;
+      padding: 0 16px;
+    }
+
+    /* Strona pojedynczej karty — na razie zajawka, tu bedziemy pracowac */
+    .page {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      height: 100%;
+      text-align: center;
+      color: #949ba4;
+      font-size: 14px;
+    }
+
+    .page .big {
+      font-size: 56px;
+      line-height: 1;
+    }
+
+    .page h2 {
+      margin: 0;
+      font-size: 21px;
+      color: #fff;
+    }
+
+    .page .pill {
+      margin-top: 6px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: #2b2d31;
+      border: 1px solid #3f4147;
+      font-size: 11px;
+      letter-spacing: 0.8px;
+      color: #949ba4;
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <div class="topbar">
+      <div class="nav">
+        <button id="back" class="navbtn" type="button" title="Poprzednia karta">&#8592;</button>
+        <button id="fwd" class="navbtn" type="button" title="Nastepna karta">&#8594;</button>
+      </div>
+      <div class="title" id="title">Zarzadzanie serwerem</div>
+      <div class="nav">
+        <button id="home" class="navbtn" type="button" title="Wszystkie karty">&#8962;</button>
+        <button id="close" class="closebtn" type="button" title="Zamknij (Esc)">&times;</button>
+      </div>
+    </div>
+    <div id="content" class="content"></div>
+  </div>
+
+  <script>
+    (function () {
+      var api = window.manageAPI || {};
+
+      // Plytka lista kart; strzalki <- / -> przechodza po niej, a klikniecie
+      // w karte na ekranie startowym wchodzi do srodka. Ostatnia karte
+      // zapamietuje proces glowny (manage-panel.json) i przy otwarciu okna
+      // przywraca.
+      var PAGES = [
+        { id: "home", title: "Wszystkie karty", label: "" },
+        { id: "moderation", title: "Moderacja", label: "Moderowanie na serwerze", emoji: "🛡️" },
+        { id: "bots", title: "Boty", label: "Zarzadzanie botami Discord", emoji: "🤖" }
+      ];
+      var idx = 0;
+
+      var content = document.getElementById("content");
+      var backBtn = document.getElementById("back");
+      var fwdBtn = document.getElementById("fwd");
+      var titleEl = document.getElementById("title");
+
+      function esc(s) {
+        return String(s).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+
+      function pageCard(p) {
+        return (
+          '<div class="card" data-page="' +
+          esc(p.id) +
+          '">' +
+          '<div class="emoji">' + p.emoji + "</div>" +
+          '<div class="label">' + esc(p.label) + "</div>" +
+          "</div>"
+        );
+      }
+
+      function pagePlaceholder(p) {
+        return (
+          '<div class="page">' +
+          '<div class="big">' + p.emoji + "</div>" +
+          "<h2>" + esc(p.label) + "</h2>" +
+          "<div>Tutaj wkrótce pojawi się panel — na razie karta jest pusta.</div>" +
+          '<div class="pill">W BUDOWIE</div>' +
+          "</div>"
+        );
+      }
+
+      function render() {
+        var p = PAGES[idx];
+        if (p.id === "home") {
+          var cards = [];
+          for (var i = 0; i < PAGES.length; i++) {
+            if (PAGES[i].id !== "home") cards.push(pageCard(PAGES[i]));
+          }
+          content.innerHTML = '<div class="grid">' + cards.join("") + "</div>";
+          var els = content.querySelectorAll(".card");
+          for (var j = 0; j < els.length; j++) {
+            els[j].addEventListener("click", function () {
+              var id = this.getAttribute("data-page");
+              for (var k = 0; k < PAGES.length; k++) {
+                if (PAGES[k].id === id) go(k);
+              }
+            });
+          }
+        } else {
+          content.innerHTML = pagePlaceholder(p);
+        }
+        titleEl.textContent = "Zarzadzanie serwerem — " + p.title;
+        backBtn.disabled = idx <= 0;
+        fwdBtn.disabled = idx >= PAGES.length - 1;
+      }
+
+      function go(i) {
+        if (i < 0 || i >= PAGES.length || i === idx) return;
+        idx = i;
+        render();
+        if (api.setManagePage) api.setManagePage(PAGES[idx].id);
+      }
+
+      backBtn.addEventListener("click", function () { go(idx - 1); });
+      fwdBtn.addEventListener("click", function () { go(idx + 1); });
+      document.getElementById("home").addEventListener("click", function () { go(0); });
+      document.getElementById("close").addEventListener("click", function () {
+        if (api.closeManage) api.closeManage();
+      });
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          if (api.closeManage) api.closeManage();
+        } else if (e.key === "ArrowLeft") {
+          go(idx - 1);
+        } else if (e.key === "ArrowRight") {
+          go(idx + 1);
+        }
+      });
+
+      // Proces glowny przysyla ostatnia karte po zaladowaniu okna
+      if (api.onManageState) {
+        api.onManageState(function (state) {
+          var page = state && state.page;
+          if (!page) return;
+          for (var i = 0; i < PAGES.length; i++) {
+            if (PAGES[i].id === page) {
+              idx = i;
+              break;
+            }
+          }
+          render();
+        });
+      }
+
+      render();
+    })();
+  </script>
+</body>
+</html>
