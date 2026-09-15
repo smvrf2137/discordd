@@ -27,7 +27,7 @@
       overflow: hidden;
     }
 
-    /* Pasek gorny: strzalki do zmiany karty po lewej (jak na szkicu) */
+    /* Pasek gorny: strzalki wstecz/do przodu po lewej (jak na szkicu) */
     .topbar {
       display: flex;
       align-items: center;
@@ -161,7 +161,7 @@
       padding: 0 16px;
     }
 
-    /* Strona pojedynczej karty — na razie zajawka, tu bedziemy pracowac */
+    /* Strona pojedynczej karty - na razie zajawka, tu bedziemy pracowac */
     .page {
       display: flex;
       flex-direction: column;
@@ -202,12 +202,11 @@
   <div class="window">
     <div class="topbar">
       <div class="nav">
-        <button id="back" class="navbtn" type="button" title="Poprzednia karta">&#8592;</button>
-        <button id="fwd" class="navbtn" type="button" title="Nastepna karta">&#8594;</button>
+        <button id="back" class="navbtn" type="button" title="Wstecz">&#8592;</button>
+        <button id="fwd" class="navbtn" type="button" title="Do przodu">&#8594;</button>
       </div>
       <div class="title" id="title">Zarzadzanie serwerem</div>
       <div class="nav">
-        <button id="home" class="navbtn" type="button" title="Wszystkie karty">&#8962;</button>
         <button id="close" class="closebtn" type="button" title="Zamknij (Esc)">&times;</button>
       </div>
     </div>
@@ -218,16 +217,29 @@
     (function () {
       var api = window.manageAPI || {};
 
-      // Plytka lista kart; strzalki <- / -> przechodza po niej, a klikniecie
-      // w karte na ekranie startowym wchodzi do srodka. Ostatnia karte
-      // zapamietuje proces glowny (manage-panel.json) i przy otwarciu okna
-      // przywraca.
-      var PAGES = [
-        { id: "home", title: "Wszystkie karty", label: "" },
-        { id: "moderation", title: "Moderacja", label: "Moderowanie na serwerze", emoji: "🛡️" },
-        { id: "bots", title: "Boty", label: "Zarzadzanie botami Discord", emoji: "🤖" }
-      ];
-      var idx = 0;
+      // Karty panelu. Ekran glowny (siatka kart) to "home".
+      var PAGE_BY_ID = {
+        home: { id: "home", title: "Wszystkie karty" },
+        moderation: {
+          id: "moderation",
+          title: "Moderacja",
+          label: "Moderowanie na serwerze",
+          emoji: "🛡️"
+        },
+        bots: {
+          id: "bots",
+          title: "Boty",
+          label: "Zarzadzanie botami Discord",
+          emoji: "🤖"
+        }
+      };
+      var CARD_ORDER = ["moderation", "bots"];
+
+      // Nawigacja jak w przegladarce: stos odwiedzin. Wstecz z karty ZAWSZE
+      // wraca tam, skad weszlismy (czyli do ekranu glownego), a nie do
+      // "poprzedniej karty" z listy.
+      var history = ["home"];
+      var hIdx = 0;
 
       var content = document.getElementById("content");
       var backBtn = document.getElementById("back");
@@ -238,18 +250,23 @@
         return String(s).replace(/</g, "&lt;").replace(/>/g, "&gt;");
       }
 
-      function pageCard(p) {
-        return (
-          '<div class="card" data-page="' +
-          esc(p.id) +
-          '">' +
-          '<div class="emoji">' + p.emoji + "</div>" +
-          '<div class="label">' + esc(p.label) + "</div>" +
-          "</div>"
-        );
+      function homeHTML() {
+        var cards = [];
+        for (var i = 0; i < CARD_ORDER.length; i++) {
+          var p = PAGE_BY_ID[CARD_ORDER[i]];
+          cards.push(
+            '<div class="card" data-page="' +
+              esc(p.id) +
+              '">' +
+              '<div class="emoji">' + p.emoji + "</div>" +
+              '<div class="label">' + esc(p.label) + "</div>" +
+              "</div>"
+          );
+        }
+        return '<div class="grid">' + cards.join("") + "</div>";
       }
 
-      function pagePlaceholder(p) {
+      function pageHTML(p) {
         return (
           '<div class="page">' +
           '<div class="big">' + p.emoji + "</div>" +
@@ -261,40 +278,52 @@
       }
 
       function render() {
-        var p = PAGES[idx];
-        if (p.id === "home") {
-          var cards = [];
-          for (var i = 0; i < PAGES.length; i++) {
-            if (PAGES[i].id !== "home") cards.push(pageCard(PAGES[i]));
-          }
-          content.innerHTML = '<div class="grid">' + cards.join("") + "</div>";
-          var els = content.querySelectorAll(".card");
-          for (var j = 0; j < els.length; j++) {
-            els[j].addEventListener("click", function () {
-              var id = this.getAttribute("data-page");
-              for (var k = 0; k < PAGES.length; k++) {
-                if (PAGES[k].id === id) go(k);
-              }
-            });
-          }
-        } else {
-          content.innerHTML = pagePlaceholder(p);
+        var p = PAGE_BY_ID[history[hIdx]];
+        content.innerHTML = p.id === "home" ? homeHTML() : pageHTML(p);
+        var els = content.querySelectorAll(".card");
+        for (var j = 0; j < els.length; j++) {
+          els[j].addEventListener("click", function () {
+            open(this.getAttribute("data-page"));
+          });
         }
-        titleEl.textContent = "Zarzadzanie serwerem — " + p.title;
-        backBtn.disabled = idx <= 0;
-        fwdBtn.disabled = idx >= PAGES.length - 1;
+        titleEl.textContent =
+          "Zarzadzanie serwerem" + (p.id === "home" ? "" : " — " + p.title);
+        backBtn.disabled = hIdx <= 0;
+        fwdBtn.disabled = hIdx >= history.length - 1;
       }
 
-      function go(i) {
-        if (i < 0 || i >= PAGES.length || i === idx) return;
-        idx = i;
+      // Pamietamy tylko swiadome nawigacje uzytkownika. Pierwsze renderowanie
+      // (oraz przywracanie stanu) NIE nadpisuje zapisanej karty - inaczej
+      // wywaliloby "home" zanim nadejdzie manage-state z procesu glownego.
+      function navigate() {
         render();
-        if (api.setManagePage) api.setManagePage(PAGES[idx].id);
+        if (api.setManagePage) api.setManagePage(history[hIdx]);
       }
 
-      backBtn.addEventListener("click", function () { go(idx - 1); });
-      fwdBtn.addEventListener("click", function () { go(idx + 1); });
-      document.getElementById("home").addEventListener("click", function () { go(0); });
+      // Wejscie w karte = nowy wpis w historii (sciema ewent. "do przodu").
+      function open(pageId) {
+        if (!PAGE_BY_ID[pageId]) return;
+        if (history[hIdx] === pageId) return;
+        history = history.slice(0, hIdx + 1);
+        history.push(pageId);
+        hIdx = history.length - 1;
+        navigate();
+      }
+
+      function back() {
+        if (hIdx <= 0) return;
+        hIdx--;
+        navigate();
+      }
+
+      function forward() {
+        if (hIdx >= history.length - 1) return;
+        hIdx++;
+        navigate();
+      }
+
+      backBtn.addEventListener("click", back);
+      fwdBtn.addEventListener("click", forward);
       document.getElementById("close").addEventListener("click", function () {
         if (api.closeManage) api.closeManage();
       });
@@ -303,22 +332,27 @@
         if (e.key === "Escape") {
           if (api.closeManage) api.closeManage();
         } else if (e.key === "ArrowLeft") {
-          go(idx - 1);
+          back();
         } else if (e.key === "ArrowRight") {
-          go(idx + 1);
+          forward();
         }
       });
 
-      // Proces glowny przysyla ostatnia karte po zaladowaniu okna
+      // Proces glowny przysyla ostatnia karte po zaladowaniu okna.
+      // Jesli ostatnio bylismy w karcie, histori seedingujemy [home, karta],
+      // zeby strzalka wstecz od razu cofnela do ekranu glownego.
+      var restored = false;
       if (api.onManageState) {
         api.onManageState(function (state) {
           var page = state && state.page;
-          if (!page) return;
-          for (var i = 0; i < PAGES.length; i++) {
-            if (PAGES[i].id === page) {
-              idx = i;
-              break;
-            }
+          if (!page || !PAGE_BY_ID[page] || restored) return;
+          restored = true;
+          if (page === "home") {
+            history = ["home"];
+            hIdx = 0;
+          } else {
+            history = ["home", page];
+            hIdx = 1;
           }
           render();
         });
